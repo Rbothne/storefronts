@@ -5,9 +5,9 @@
     "delay_seconds": 1.0
   },
   "stores": [
-    {"host": "rowingblazers.com", "name": "Rowing Blazers", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": false, "collections": ["sale"]},
+    {"host": "rowingblazers.com", "name": "Rowing Blazers", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
     {"host": "www.todayclothing.com", "name": "Today Clothing", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
-    {"host": "havnstore.com", "name": "HAVN", "platform": "shopify", "group": "clothing", "currency": "AUD", "browse": true, "collections": ["teatora"]},
+    {"host": "havnstore.com", "name": "HAVN", "platform": "shopify", "group": "clothing", "currency": "AUD", "browse": true},
     {"host": "ladywhiteco.com", "name": "Lady White Co.", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
     {"host": "shop.moonstar-usa.com", "name": "Moonstar", "platform": "shopify", "group": "clothing", "kind": "footwear", "currency": "USD", "browse": true},
     {"host": "www.aimeleondore.com", "name": "Aimé Leon Dore", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},

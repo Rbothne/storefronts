@@ -51,16 +51,11 @@
           border: 1px solid var(--line); background: var(--card); font-size: 17px; line-height: 1; }
   .star[aria-pressed="true"] { color: var(--sale); }
   .star:disabled { cursor: default; opacity: .75; }
-  .mute { top: 44px; font-size: 13px; color: var(--muted); opacity: 0; transition: opacity .15s; }
-  .card:hover .mute, .mute:focus-visible { opacity: 1; }
-  @media (hover: none) { .mute { opacity: .8; } }
+  .org { top: 44px; font-weight: 700; }
+  .org[aria-pressed="true"] { background: var(--accent); color: var(--bg); border-color: var(--accent); }
   .hist { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
   .hist path { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linejoin: round; }
   .hist circle { fill: var(--accent); }
-  #toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 9; display: flex; gap: 12px;
-           align-items: center; background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 10px; }
-  #toast[hidden] { display: none; }
-  #toast button { background: none; border: 0; color: inherit; font-weight: 700; text-decoration: underline; padding: 0; }
   .body { padding: 9px 10px 10px; display: flex; flex-direction: column; gap: 3px; }
   .store { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
   .title { font-weight: 600; overflow-wrap: anywhere; }
@@ -87,11 +82,11 @@
   .chips { display: flex; flex-wrap: wrap; gap: 4px; }
   .chips button { border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 3px 8px;
                   min-width: 34px; font-variant-numeric: tabular-nums; }
-  #storelist { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
-  #storelist div { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 8px;
-                   border-bottom: 1px solid var(--line); }
-  #storelist small { color: var(--muted); }
   dialog textarea { width: 100%; height: 70px; font-size: 12px; }
+  dialog h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; }
+  .chips input { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line);
+                 border-radius: 6px; padding: 3px 8px; width: 130px; }
+  .chips .meta { align-self: center; }
   dialog .bar { display: flex; gap: 8px; justify-content: space-between; margin-top: 14px; }
 </style>
 </head>
@@ -102,12 +97,8 @@
     <input type="search" id="q" placeholder="Search title, brand, store" aria-label="Search">
     <select id="group" aria-label="Category"></select>
     <select id="store" aria-label="Store"></select>
-    <select id="tier" aria-label="Store level">
-      <option value="">All but "not interested"</option><option value="1">Priority 1 stores</option>
-      <option value="1,2">Priority 1 and 2</option><option value="2">Priority 2 stores</option>
-      <option value="gift">Gift stores</option><option value="none">Unrated stores</option>
-      <option value="no">Hidden: not interested</option>
-    </select>
+    <select id="itemcat" aria-label="My item categories"></select>
+    <select id="storecat" aria-label="My store categories"></select>
     <select id="gender" aria-label="Men's or women's">
       <option value="">Men's and women's</option><option value="m">Men's and unisex</option>
       <option value="w">Women's and unisex</option>
@@ -124,7 +115,7 @@
     </select>
     <label><input type="checkbox" id="stock"> In stock</label>
     <label><input type="checkbox" id="mysizes"> My sizes</label>
-    <button class="pill" id="opensettings">Sizes &amp; stores</button>
+    <button class="pill" id="opensettings">Sizes &amp; categories</button>
   </div>
 </header>
 <main>
@@ -133,7 +124,6 @@
   <button id="more" hidden>Show more</button>
 </main>
 <footer id="foot"></footer>
-<div id="toast" hidden><span></span><button>Undo</button></div>
 
 <dialog id="settings">
   <h2>My sizes</h2>
@@ -143,13 +133,15 @@
   <div class="row"><span>Bottoms</span><div class="chips" id="sz-bottoms"></div></div>
   <div class="row"><span>Shoes (US men's)</span><div class="chips" id="sz-shoes"></div></div>
 
-  <h2>Stores</h2>
-  <p>Rate stores to filter by level. “Not interested” hides a store everywhere except your followed items and the “Hidden: not interested” view.</p>
-  <div id="storelist"></div>
+  <h2>My categories</h2>
+  <p>Create and assign categories with ⋯ on any card. Here you can delete one: click it, then click again to confirm.</p>
+  <div class="row"><span>Item categories</span><div class="chips" id="itemcatlist"></div></div>
+  <div class="row"><span>Store categories</span><div class="chips" id="storecatlist"></div></div>
 
-  <h2>Hidden brands</h2>
-  <p>Use ✕ on a card to hide everything from its brand. Click a brand here to bring it back.</p>
-  <div class="chips" id="mutedlist"></div>
+  <h2>Not interested</h2>
+  <p>Stores and brands you hid with ⋯ on a card. Click one to bring it back.</p>
+  <div class="row"><span>Stores</span><div class="chips" id="hiddenlist"></div></div>
+  <div class="row"><span>Brands</span><div class="chips" id="mutedlist"></div></div>
 
   <h2>Followed items</h2>
   <p>Stars are saved in this browser and only tracked while the item is on sale. To track one permanently
@@ -163,26 +155,35 @@
     <button class="pill" id="closesettings">Done</button></div>
 </dialog>
 
+<dialog id="organize">
+  <div id="orgbody"></div>
+  <div class="bar"><span></span><button class="pill" id="closeorganize">Done</button></div>
+</dialog>
+
 <script>
-const TABS = [["wish", "Followed"], ["brands", "Brands"], ["sale", "On sale"], ["coll", "Collections"], ["all", "Everything"]];
-const TIERS = [["", "Unrated"], ["1", "Priority 1"], ["2", "Priority 2"], ["gift", "Gifts"], ["no", "Not interested"]];
+const TABS = [["wish", "Followed"], ["brands", "Brands"], ["sale", "On sale"], ["all", "Everything"]];
 const LETTERS = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"];
 // Fallback grouping between waist inches and letter sizes, used when you picked only one of the two.
 const WAIST = { XS: [26, 27, 28], S: [29, 30], M: [31, 32, 33], L: [34, 35, 36], XL: [37, 38, 39, 40], XXL: [41, 42, 43] };
 const PAGE = 120, KEY = "listings-prefs";
-let DATA = { items: [], status: [], tiers: {} }, IDS = new Set(), tab = "wish", shown = PAGE;
-// Personal settings, kept in this browser: starred items, store levels, hidden brands, sizes.
-let prefs = { follows: {}, tiers: {}, muted: {}, gender: "", sizes: { tops: [], bottoms: [], shoes: [] } };
+let DATA = { items: [], status: [] }, IDS = new Set(), tab = "wish", shown = PAGE;
+// Personal settings, kept in this browser.
+//   follows    starred items (a copy of each, so it still shows after leaving the sale data)
+//   itemCats   your categories per item id; kept holds the copy of each categorised item
+//   storeCats  your categories per store host
+//   hidden     stores you are not interested in;  muted  brands you are not interested in
+let prefs;
 const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
 function loadPrefs(text) {
   const p = JSON.parse(text);
-  prefs = { follows: p.follows || {}, tiers: p.tiers || {}, muted: p.muted || {}, gender: p.gender || "",
+  prefs = { follows: p.follows || {}, itemCats: p.itemCats || {}, kept: p.kept || {}, storeCats: p.storeCats || {},
+            hidden: p.hidden || {}, muted: p.muted || {}, gender: p.gender || "",
             sizes: { tops: [], bottoms: [], shoes: [], ...(p.sizes || {}) } };
 }
 function savePrefs() { try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch (e) {} }
-try { loadPrefs(localStorage.getItem(KEY) || "{}"); } catch (e) {}
+try { loadPrefs(localStorage.getItem(KEY) || "{}"); } catch (e) { loadPrefs("{}"); }
 
 function money(v, cur) {
   if (v == null) return "";
@@ -198,13 +199,17 @@ function thumb(src) {
 }
 function daysSince(d) { return Math.floor((Date.now() - new Date(d + "T00:00:00Z")) / 864e5); }
 
-// ---- follows, brands, store levels, sizes
+// ---- follows, brands, your categories, sizes
 const inFile = i => i.tags.includes("wish");                 // listed in wishlist.txt
 const isFollowed = i => inFile(i) || i.id in prefs.follows;
 const brandKey = b => (b || "").toLowerCase().replace(/\b(wo)?mens\b/g, "").replace(/[^a-z0-9]/g, "");
-const tierOf = host => host in prefs.tiers ? prefs.tiers[host] : (DATA.tiers || {})[host] || "";
-// Everything in the latest data, plus starred items that have since dropped out of it.
-const pool = () => [...DATA.items, ...Object.values(prefs.follows).filter(f => !IDS.has(f.id)).map(f => ({ ...f, tags: [], gone: true }))];
+// Everything in the latest data, plus starred or categorised items that have since dropped out of it.
+const pool = () => [...DATA.items, ...Object.values({ ...prefs.kept, ...prefs.follows }).filter(f => !IDS.has(f.id)).map(f => ({ ...f, tags: [], gone: true }))];
+const namesIn = map => [...new Set(Object.values(map).flat())].sort((a, b) => a.localeCompare(b));
+function toggleCat(map, key, name) {
+  const next = (map[key] || []).includes(name) ? map[key].filter(n => n !== name) : [...(map[key] || []), name];
+  next.length ? map[key] = next : delete map[key];
+}
 function followedBrands(items) {
   const m = new Map();
   for (const i of items) {
@@ -213,17 +218,17 @@ function followedBrands(items) {
   }
   return m;
 }
-const ruledOut = i => tierOf(i.store) === "no" || brandKey(i.brand) in prefs.muted;   // store or brand you hid
+const ruledOut = i => i.store in prefs.hidden || brandKey(i.brand) in prefs.muted;    // store or brand you hid
+// Menu values: "c:<name>" is one of your categories; "none" and "hidden" are built in.
 function storeShown(i) {
-  const want = $("tier").value;
-  if (want === "no") return ruledOut(i);                     // the one place hidden things are shown
-  return !ruledOut(i) && (!want || want.split(",").includes(tierOf(i.store) || "none"));
+  const want = $("storecat").value, mine = prefs.storeCats[i.store] || [];
+  if (want === "hidden") return ruledOut(i);                 // the one place hidden things are shown
+  return !ruledOut(i) && (!want || (want === "none" ? !mine.length : mine.includes(want.slice(2))));
 }
 // Best-deals score: the discount, plus signals that it is a deal for you. Tune the weights here.
 function score(i, brands) {
   let s = (i.off || 0) >= 90 ? 30 : i.off || 0;              // 90%+ off is almost always a listing error
   if (brands.has(brandKey(i.brand))) s += 25;                // a brand you follow
-  s += { 1: 15, 2: 7 }[tierOf(i.store)] || 0;                // a store you rated
   if (i.sz && !i.sz.includes("OS") && wantedSizes(i.kind).length && sizeOK(i)) s += 10;   // in stock in your size
   if (i.hist && i.price <= Math.min(...i.hist.map(h => h[1]))) s += 10;                 // lowest price tracked
   if (i.first_seen && daysSince(i.first_seen) <= 3) s += 5;  // just appeared
@@ -231,8 +236,9 @@ function score(i, brands) {
   return s;
 }
 function inTab(i, key, brands) {
-  if (key === "wish") return isFollowed(i);                  // followed items ignore store levels
-  if (i.gone || !storeShown(i)) return false;
+  if (key === "wish") return isFollowed(i);                  // followed items ignore hidden stores
+  if (i.gone) return key === "all" && i.id in prefs.itemCats;   // categorised, but no longer on sale
+  if (!storeShown(i)) return false;
   if (key === "brands") return brands.has(brandKey(i.brand)) && !isFollowed(i);
   return key === "all" || i.tags.includes(key);
 }
@@ -254,11 +260,13 @@ function sizeOK(i) {
 function filtered(items, brands) {
   const q = $("q").value.trim().toLowerCase(), g = $("group").value, s = $("store").value;
   const min = +$("minoff").value, stock = $("stock").checked, mine = $("mysizes").checked, gen = $("gender").value;
+  const cat = $("itemcat").value.slice(2);
   const list = items.filter(i =>
     inTab(i, tab, brands) &&
     (!g || i.group === g || i.group + "/" + i.kind === g) && (!s || i.store === s) &&
     (i.off || 0) >= min && (!stock || i.avail === true) && (!mine || sizeOK(i)) &&
     (!gen || !i.g || i.g === gen) &&                         // unlabelled items count as unisex
+    (!cat || (prefs.itemCats[i.id] || []).includes(cat)) &&
     (!q || (i.title + " " + (i.brand || "") + " " + i.store_name).toLowerCase().includes(q)));
   const usd = i => i.usd ?? i.price;                         // compare prices in one currency
   const sc = new Map(list.map(i => [i, score(i, brands)]));
@@ -288,16 +296,58 @@ function star(i) {
   return b;
 }
 
-function toast(text, undo) {
-  const t = $("toast"); t.firstChild.textContent = text; t.hidden = false;
-  t.lastChild.onclick = () => { undo(); t.hidden = true; };
-  clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.hidden = true; }, 8000);
+// One row of toggle chips for your categories, with a box to add a new one.
+function catPicker(map, key, after) {
+  const box = el("div", "chips"), known = new Set(namesIn(map));   // keep a chip visible after un-ticking its last member
+  const draw = focus => {
+    box.replaceChildren(...[...known].sort((a, b) => a.localeCompare(b)).map(name => {
+      const b = el("button", null, name); b.setAttribute("aria-pressed", (map[key] || []).includes(name));
+      b.onclick = () => { toggleCat(map, key, name); after(); draw(); };
+      return b;
+    }));
+    const input = el("input"), add = el("button", null, "Add");
+    input.placeholder = "New category"; input.maxLength = 30; input.setAttribute("aria-label", "New category");
+    const submit = () => {
+      const name = input.value.trim();
+      if (!name) return;
+      known.add(name);
+      if (!(map[key] || []).includes(name)) { toggleCat(map, key, name); after(); }
+      draw(true);
+    };
+    add.onclick = submit; input.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); submit(); } };
+    box.append(input, add);
+    if (focus) input.focus();
+  };
+  draw();
+  return box;
 }
-function muteButton(i) {
-  const k = brandKey(i.brand), b = el("button", "star mute", k in prefs.muted ? "↩" : "✕");
-  const flip = () => { k in prefs.muted ? delete prefs.muted[k] : prefs.muted[k] = i.brand; savePrefs(); render(); };
-  b.title = (k in prefs.muted ? "Show " : "Not interested in ") + i.brand; b.setAttribute("aria-label", b.title);
-  b.onclick = () => { const hid = !(k in prefs.muted); flip(); if (hid) toast("Hid everything from " + i.brand + ".", flip); };
+// A toggle chip for "not interested".
+function hideChip(label, map, key, value) {
+  const b = el("button", null, label); b.setAttribute("aria-pressed", key in map);
+  b.onclick = () => { key in map ? delete map[key] : map[key] = value; savePrefs(); b.setAttribute("aria-pressed", key in map); };
+  return b;
+}
+// The ⋯ menu on a card: categories for this item and for its store, and "not interested".
+function organize(i) {
+  const keep = () => {                                       // categorised items keep a copy, like starred ones
+    if (i.id in prefs.itemCats) { const { tags, gone, ...copy } = i; prefs.kept[i.id] = copy; } else delete prefs.kept[i.id];
+    savePrefs();
+  };
+  const hide = el("div", "chips");
+  hide.append(hideChip("Hide the store " + i.store_name, prefs.hidden, i.store, i.store_name));
+  if (brandKey(i.brand)) hide.append(hideChip("Hide the brand " + i.brand, prefs.muted, brandKey(i.brand), i.brand));
+  $("orgbody").replaceChildren(
+    el("h2", null, i.title),
+    el("h3", null, "This item is in"), catPicker(prefs.itemCats, i.id, keep),
+    el("h3", null, "The store " + i.store_name + " is in"), catPicker(prefs.storeCats, i.store, savePrefs),
+    el("h3", null, "Not interested"), hide);
+  $("organize").showModal();
+}
+function orgButton(i) {
+  const b = el("button", "star org", "⋯");
+  b.title = "Categories and hide options"; b.setAttribute("aria-label", b.title);
+  b.setAttribute("aria-pressed", i.id in prefs.itemCats);    // filled when the item is in one of your categories
+  b.onclick = () => organize(i);
   return b;
 }
 // Price history sparkline: a step line (a price holds until it changes), scaled by date, today's price marked.
@@ -343,16 +393,15 @@ function card(i) {
   }
   if (i.hist && i.price != null) b.append(spark(i));
   const notes = [];
+  if (prefs.itemCats[i.id]) notes.push("In: " + prefs.itemCats[i.id].join(", "));
   if (i.gone) notes.push("No longer in the sale data; add its link to wishlist.txt to keep tracking it");
   if (i.tracked_drop) notes.push("Down from highest price tracked");
   if (i.avail === false) notes.push("Sold out");
   if (i.stale) notes.push("Last update failed; showing older data");
   if (i.link_only) notes.push(i.note || "Price not tracked for this store");
-  if (i.coll && tab === "coll") notes.push("Collection: " + i.coll);
   if (i.sizes && i.sizes.length) notes.push(i.sizes.join(", "));
   if (notes.length) b.append(el("div", "meta", notes.join(" · ")));
-  a.append(b); c.append(a, star(i));
-  if (brandKey(i.brand) && !isFollowed(i)) c.append(muteButton(i));
+  a.append(b); c.append(a, star(i), orgButton(i));
   return c;
 }
 
@@ -395,25 +444,46 @@ function drawSettings() {
   chips($("sz-tops"), LETTERS, prefs.sizes.tops);
   chips($("sz-bottoms"), [...LETTERS.slice(1, 7), ...range(26, 42)], prefs.sizes.bottoms);
   chips($("sz-shoes"), range(6, 14, 0.5), prefs.sizes.shoes);
-  const n = {}, names = {};
-  for (const i of DATA.items) { n[i.store] = (n[i.store] || 0) + 1; names[i.store] = i.store_name; }
-  for (const s of DATA.status) { n[s.host] ??= 0; names[s.host] = s.name; }
-  $("storelist").replaceChildren(...Object.keys(n).sort((a, b) => n[b] - n[a] || names[a].localeCompare(names[b])).map(h => {
-    const row = el("div"), label = el("span", null, names[h] + " "), sel = el("select");
-    label.append(el("small", null, n[h] + " items"));
-    sel.append(...TIERS.map(([v, t]) => new Option(t, v))); sel.value = tierOf(h); sel.setAttribute("aria-label", "Level for " + names[h]);
-    sel.onchange = () => { prefs.tiers[h] = sel.value; savePrefs(); reset(); };
-    row.append(label, sel);
-    return row;
-  }));
-  const muted = Object.entries(prefs.muted).sort((a, b) => a[1].localeCompare(b[1]));
-  $("mutedlist").replaceChildren(...muted.map(([k, name]) => {
-    const b = el("button", null, name + " ✕"); b.title = "Show " + name + " again";
-    b.onclick = () => { delete prefs.muted[k]; savePrefs(); drawSettings(); reset(); };
-    return b;
-  }));
-  if (!muted.length) $("mutedlist").append(el("span", "meta", "None hidden."));
+  // Your categories: click, then click again, to delete one everywhere.
+  const catList = (box, map, after) => {
+    const names = namesIn(map);
+    box.replaceChildren(...names.map(name => {
+      const n = Object.values(map).filter(l => l.includes(name)).length, b = el("button", null, name + " (" + n + ") ✕");
+      b.onclick = () => {
+        if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = "Delete “" + name + "”?"; return; }
+        for (const k of Object.keys(map)) if (map[k].includes(name)) toggleCat(map, k, name);
+        after(); savePrefs(); drawSettings(); fillCatMenus(); reset();
+      };
+      return b;
+    }));
+    if (!names.length) box.append(el("span", "meta", "None yet."));
+  };
+  catList($("itemcatlist"), prefs.itemCats, () => { for (const id of Object.keys(prefs.kept)) if (!(id in prefs.itemCats)) delete prefs.kept[id]; });
+  catList($("storecatlist"), prefs.storeCats, () => {});
+  // Hidden stores and brands: click to bring one back.
+  const restoreList = (box, map) => {
+    const rows = Object.entries(map).sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+    box.replaceChildren(...rows.map(([k, name]) => {
+      const b = el("button", null, name + " ✕"); b.title = "Show " + name + " again";
+      b.onclick = () => { delete map[k]; savePrefs(); drawSettings(); reset(); };
+      return b;
+    }));
+    if (!rows.length) box.append(el("span", "meta", "None hidden."));
+  };
+  restoreList($("hiddenlist"), prefs.hidden); restoreList($("mutedlist"), prefs.muted);
   $("backup").value = JSON.stringify(prefs);
+}
+
+// The two "my categories" menus list whatever categories exist right now.
+function fillCatMenus() {
+  const fill = (id, first, names, extra) => {
+    const sel = $(id), was = sel.value;
+    sel.replaceChildren(new Option(first, ""), ...names.map(n => new Option(n, "c:" + n)), ...extra);
+    sel.value = [...sel.options].some(o => o.value === was) ? was : "";
+  };
+  fill("itemcat", "My item categories: any", namesIn(prefs.itemCats), []);
+  fill("storecat", "My store categories: any", namesIn(prefs.storeCats),
+       [new Option("Stores with no category", "none"), new Option("Hidden: not interested", "hidden")]);
 }
 
 function setup() {
@@ -436,19 +506,23 @@ function setup() {
   $("group").append(...opts);
   const stores = [...new Map(DATA.items.map(i => [i.store, i.store_name])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
   $("store").append(new Option("All stores", ""), ...stores.map(([h, n]) => new Option(n, h)));
-  for (const id of ["q", "group", "store", "tier", "minoff", "sort", "stock", "mysizes"]) $(id).addEventListener("input", reset);
+  fillCatMenus();
+  for (const id of ["q", "group", "store", "itemcat", "storecat", "minoff", "sort", "stock", "mysizes"]) $(id).addEventListener("input", reset);
   $("gender").value = prefs.gender;                           // remembered between visits
   $("gender").addEventListener("input", () => { prefs.gender = $("gender").value; savePrefs(); reset(); });
   $("more").onclick = () => { shown += PAGE; render(); };
 
   $("opensettings").onclick = () => { drawSettings(); $("settings").showModal(); };
   $("closesettings").onclick = () => $("settings").close();
+  $("closeorganize").onclick = () => $("organize").close();
+  $("organize").addEventListener("close", () => { fillCatMenus(); render(); });   // show what changed, keep your place
+  for (const d of [$("settings"), $("organize")]) d.addEventListener("click", e => { if (e.target === d) d.close(); });
   $("copylinks").onclick = () => {
     const links = Object.values(prefs.follows).map(f => f.url).join("\n");
     navigator.clipboard.writeText(links).then(() => { $("copylinks").textContent = "Copied " + Object.keys(prefs.follows).length + " links"; });
   };
   $("loadbackup").onclick = () => {
-    try { loadPrefs($("backup").value); savePrefs(); $("gender").value = prefs.gender; drawSettings(); reset(); $("loadbackup").textContent = "Loaded"; }
+    try { loadPrefs($("backup").value); savePrefs(); $("gender").value = prefs.gender; drawSettings(); fillCatMenus(); reset(); $("loadbackup").textContent = "Loaded"; }
     catch (e) { $("loadbackup").textContent = "That text is not a valid backup"; }
   };
 

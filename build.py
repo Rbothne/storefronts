@@ -2,7 +2,7 @@
 """Build docs/data.json for the wishlist / sale page.
 
 Reads   stores.json   (which stores, how to read them)
-        wishlist.txt  (one URL per line: product pages or Shopify collection pages)
+        wishlist.txt  (one URL per line: product pages to follow)
 Writes  docs/data.json    (what the page shows)
         data/state.json   (first-seen date and price changes for every item)
 
@@ -503,7 +503,7 @@ def main():
     previous = load_json(out_path, {"items": []})
 
     # ---- sort wishlist URLs by store
-    wish_products, wish_colls, wish_pages = {}, {}, {}
+    wish_products, wish_pages = {}, {}
     try:
         lines = open(os.path.join(ROOT, "wishlist.txt"), encoding="utf-8").read().splitlines()
     except FileNotFoundError:
@@ -520,11 +520,8 @@ def main():
             host = alt
         store = stores.setdefault(host, {"host": host, "name": host, "platform": "link", "group": "other"})
         m_prod = re.search(r"/products/([^/?#]+)", u.path)
-        m_coll = re.search(r"/collections/([^/?#]+)", u.path)
         if store["platform"] == "shopify" and m_prod:
             wish_products.setdefault(host, set()).add(unquote(m_prod.group(1)))
-        elif store["platform"] == "shopify" and m_coll:
-            wish_colls.setdefault(host, set()).add(m_coll.group(1))
         else:
             clean = url.split("#")[0]
             wish_pages.setdefault(host, [])
@@ -533,19 +530,16 @@ def main():
 
     items, status = {}, []
 
-    def add(item, tag, coll=None):
+    def add(item, tag):
         if not item:
             return
         cur = items.setdefault(item["id"], item)
         if tag not in cur["tags"]:
             cur["tags"].append(tag)
-        if coll:
-            cur["coll"] = coll
 
     for host, store in stores.items():
         name = store.get("name", host)
         errors, before = [], len(items)
-        colls = set(store.get("collections", [])) | wish_colls.get(host, set())
         wanted = set(wish_products.get(host, set()))
         print(f"{host} ...", flush=True)
 
@@ -563,15 +557,6 @@ def main():
                             add(it, "sale")
                 except Exception as e:
                     errors.append(f"catalog: {e}")
-            for c in sorted(colls):
-                try:
-                    for p in shopify_feed(host, f"/collections/{c}", max_pages):
-                        it = shopify_item(host, p)
-                        add(it, "coll", c)
-                        if it and it["off"] >= min_off and it["avail"]:
-                            add(it, "sale")
-                except Exception as e:
-                    errors.append(f"collection {c}: {e}")
             for handle in sorted(wanted):
                 url = f"https://{host}/products/{handle}"
                 try:
@@ -665,7 +650,6 @@ def main():
             "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="minutes"),
             "min_discount": min_off,
             "rates": {c: rates[c] for c in sorted({i["cur"] for i in items.values()}) if c in rates},
-            "tiers": {h: s["tier"] for h, s in stores.items() if s.get("tier")},
             "status": status,
             "items": sorted(items.values(), key=lambda i: (-i["off"], i["store"], i["title"])),
         }, f, ensure_ascii=False, separators=(",", ":"))
