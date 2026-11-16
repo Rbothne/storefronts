@@ -3,7 +3,7 @@
 A personal page that pulls sale items and wishlist prices from many shops.
 
 - `wishlist.txt`  one URL per line: product pages to follow and price-track.
-- `stores.json`   one entry per store. `platform` is `shopify` (open feed), `page` (read price from the product page) or `link` (just a link card). `browse: true` scans the whole store for sale items. `group` is the store's category; items from `clothing` stores, and from stores marked `"mixed": true`, are sorted one by one into tops, bottoms, skate gear and so on (rules in `build.py`), with `kind` as the fallback for items no rule matches.
+- `stores.json`   one entry per store. `platform` is `shopify` (open feed), `page` (read price from the product page) or `link` (just a link card). `browse: true` scans the whole store for sale items. `currency` is only a fallback for Shopify stores: they localise prices by visitor country, so the build asks each one which currency it is quoting. `group` is the store's category; items from `clothing` stores, and from stores marked `"mixed": true`, are sorted one by one into tops, bottoms, skate gear and so on (rules in `build.py`), with `kind` as the fallback for items no rule matches. `brand` overrides the brand name for a brand's own store when its feed leaves it blank or puts something else there.
 - `build.py`      fetches everything and writes `docs/data.json`. Standard library only.
 - `docs/`         the page GitHub Pages serves. `docs/chat.js` is the shopping assistant; `docs/vendor/` holds the official Anthropic SDK bundled into one file (see the note there).
 - `.github/workflows/update.yml`  runs `build.py` twice a day and commits the result.

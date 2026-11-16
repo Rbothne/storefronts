@@ -173,6 +173,19 @@ def shopify_feed(host, path, max_pages):
             return
 
 
+def served_currency(host):
+    """The currency this store is quoting to us, or None if it will not say.
+
+    Shopify stores localise prices by the visitor's country, so a shop based in
+    Japan may send US dollar prices to a US connection. Its cart reports which.
+    """
+    status, body = get(f"https://{host}/cart.js", tries=1)
+    try:
+        return json.loads(body).get("currency") or None
+    except Exception:
+        return None
+
+
 def shopify_single(host, handle):
     url = f"https://{host}/products/{handle}"
     status, body = get(url + ".js")
@@ -353,7 +366,7 @@ ALPHA = {
     "xxl": "XXL", "2xl": "XXL", "2x": "XXL", "xxlarge": "XXL", "extraextralarge": "XXL",
     "xxxl": "XXXL", "3xl": "XXXL", "3x": "XXXL", "xxxlarge": "XXXL", "extraextraextralarge": "XXXL",
 }
-ONE_SIZE = {"os", "osfa", "onesize", "onesizefitsall", "free", "freesize", "f", "one"}
+ONE_SIZE = {"os", "osfa", "onesize", "onesizefitsall", "fitsall", "free", "freesize", "f", "one"}
 JAPAN = {0: "XXS", 1: "XS", 2: "S", 3: "M", 4: "L", 5: "XL", 6: "XXL"}  # Japanese 1-5 sizing: 3 is a medium
 
 
@@ -544,6 +557,8 @@ def main():
         print(f"{host} ...", flush=True)
 
         if store["platform"] == "shopify":
+            if store.get("browse") or wanted:
+                store["currency"] = served_currency(host) or store.get("currency", "USD")
             if store.get("browse"):
                 try:
                     for p in shopify_feed(host, "", max_pages):
@@ -596,6 +611,8 @@ def main():
     for it in items.values():
         s = stores.get(it["store"], {})
         it["store_name"] = s.get("name", it["store"])
+        if s.get("brand"):                       # brand-run stores whose own "vendor" field is not the brand
+            it["brand"] = s["brand"]
         ptype = it.pop("ptype", "")
         if not it.get("stale"):  # stale items keep the category they had
             group, kind = s.get("group", "other"), None
