@@ -83,6 +83,7 @@
   .chips button { border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 3px 8px;
                   min-width: 34px; font-variant-numeric: tabular-nums; }
   dialog textarea { width: 100%; height: 70px; font-size: 12px; }
+  dialog .check { display: flex; gap: 6px; align-items: center; margin: 4px 0 6px; }
   dialog h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; }
   .chips input { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line);
                  border-radius: 6px; padding: 3px 8px; width: 130px; }
@@ -201,6 +202,10 @@
   <div class="row"><span>Item categories</span><div class="chips" id="itemcatlist"></div></div>
   <div class="row"><span>Store categories</span><div class="chips" id="storecatlist"></div></div>
 
+  <h2>High-volume stores</h2>
+  <label class="check"><input type="checkbox" id="calm"> Hide stores that list far more items than the rest</label>
+  <p id="calminfo"></p>
+
   <h2>Not interested</h2>
   <p>Stores and brands you hid with ⋯ on a card. Click one to bring it back.</p>
   <div class="row"><span>Stores</span><div class="chips" id="hiddenlist"></div></div>
@@ -240,6 +245,7 @@ let DATA = { items: [], status: [] }, IDS = new Set(), tab = "wish", shown = PAG
 //   storeCats  your categories per store host
 //   hidden     stores you are not interested in;  muted  brands you are not interested in
 //   notes      preferences the shopping assistant saved (the API key is stored separately, never in here)
+//   calm       true to hide high-volume stores (see crowd() below)
 let prefs;
 const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -247,7 +253,7 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 function loadPrefs(text) {
   const p = JSON.parse(text);
   prefs = { follows: p.follows || {}, itemCats: p.itemCats || {}, kept: p.kept || {}, storeCats: p.storeCats || {},
-            hidden: p.hidden || {}, muted: p.muted || {}, gender: p.gender || "", notes: p.notes || [],
+            hidden: p.hidden || {}, muted: p.muted || {}, gender: p.gender || "", notes: p.notes || [], calm: !!p.calm,
             sizes: { tops: [], bottoms: [], shoes: [], ...(p.sizes || {}) } };
 }
 function savePrefs() { try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch (e) {} }
@@ -286,12 +292,29 @@ function followedBrands(items) {
   }
   return m;
 }
+// High-volume stores, by the box-plot rule for outliers: a store is flagged when it lists more items than
+// Q3 + 1.5 x (Q3 - Q1), where Q1 and Q3 are the first and third quartiles of items-per-store.
+let CROWD = { fence: Infinity, hosts: new Set(), count: {} };
+function crowd() {
+  const count = {};
+  for (const i of DATA.items) count[i.store] = (count[i.store] || 0) + 1;
+  // Judge a store by everything that qualified, not by what is left after the build's per-store cap.
+  for (const s of DATA.status) if (s.host in count && s.qualified > count[s.host]) count[s.host] = s.qualified;
+  const c = Object.values(count).sort((a, b) => a - b);
+  const q = p => { const x = (c.length - 1) * p, lo = Math.floor(x); return c[lo] + (x - lo) * ((c[lo + 1] ?? c[lo]) - c[lo]); };
+  const fence = c.length < 8 ? Infinity : q(.75) + 1.5 * (q(.75) - q(.25));   // too few stores to call any an outlier
+  return { fence, hosts: new Set(Object.keys(count).filter(h => count[h] > fence)), count };
+}
+// Hidden by that setting, unless you put the store in one of your categories.
+const crowdedOut = i => prefs.calm && CROWD.hosts.has(i.store) && !(i.store in prefs.storeCats);
 const ruledOut = i => i.store in prefs.hidden || brandKey(i.brand) in prefs.muted;    // store or brand you hid
 // Menu values: "c:<name>" is one of your categories; "none" and "hidden" are built in.
 function storeShown(i) {
   const want = $("storecat").value, mine = prefs.storeCats[i.store] || [];
   if (want === "hidden") return ruledOut(i);                 // the one place hidden things are shown
-  return !ruledOut(i) && (!want || (want === "none" ? !mine.length : mine.includes(want.slice(2))));
+  if (want === "crowded") return CROWD.hosts.has(i.store) && !ruledOut(i);
+  if (ruledOut(i) || (crowdedOut(i) && $("store").value !== i.store)) return false;   // picking a store by name still shows it
+  return !want || (want === "none" ? !mine.length : mine.includes(want.slice(2)));
 }
 // Best-deals score: the discount, plus signals that it is a deal for you. Tune the weights here.
 function score(i, brands) {
@@ -489,6 +512,8 @@ function render() {
   let text = list.length + (list.length === 1 ? " item" : " items");
   if (tab === "brands" && list.length)                       // name only the brands that have something to show
     text += " from brands you follow: " + [...new Set(list.map(i => brands.get(brandKey(i.brand))))].sort().join(", ");
+  const quiet = tab === "wish" || $("storecat").value === "crowded" ? 0 : [...CROWD.hosts].filter(h => crowdedOut({ store: h }) && $("store").value !== h).length;
+  if (quiet) text += " · " + quiet + " high-volume " + (quiet === 1 ? "store" : "stores") + " hidden";
   $("count").textContent = text;
   $("more").hidden = list.length <= shown;
   $("more").textContent = "Show more (" + (list.length - shown) + " left)";
@@ -512,6 +537,12 @@ function drawSettings() {
   chips($("sz-tops"), LETTERS, prefs.sizes.tops);
   chips($("sz-bottoms"), [...LETTERS.slice(1, 7), ...range(26, 42)], prefs.sizes.bottoms);
   chips($("sz-shoes"), range(6, 14, 0.5), prefs.sizes.shoes);
+  const big = [...CROWD.hosts].sort((a, b) => CROWD.count[b] - CROWD.count[a]), nameOf = h => (DATA.items.find(i => i.store === h) || {}).store_name || h;
+  $("calm").checked = prefs.calm;
+  $("calminfo").textContent = big.length
+    ? "A store counts as high-volume when it has more than " + Math.round(CROWD.fence).toLocaleString() + " qualifying items, the usual statistical test for an outlier among the stores. Right now that is: " +
+      big.map(h => nameOf(h) + " (" + CROWD.count[h].toLocaleString() + ")").join(", ") + ". Stores you put in a category are never hidden, and choosing a store by name still shows it."
+    : "No store stands out from the rest right now.";
   // Your categories: click, then click again, to delete one everywhere.
   const catList = (box, map, after) => {
     const names = namesIn(map);
@@ -557,11 +588,13 @@ function fillCatMenus() {
   };
   fill("itemcat", "My item categories: any", namesIn(prefs.itemCats), []);
   fill("storecat", "My store categories: any", namesIn(prefs.storeCats),
-       [new Option("Stores with no category", "none"), new Option("Hidden: not interested", "hidden")]);
+       [new Option("Stores with no category", "none"), new Option("Hidden: not interested", "hidden"),
+        ...(CROWD.hosts.size ? [new Option("High-volume stores only", "crowded")] : [])]);
 }
 
 function setup() {
   IDS = new Set(DATA.items.map(i => i.id));
+  CROWD = crowd();
   for (const [key, label] of TABS) {
     const btn = el("button", null, label); btn.dataset.tab = key; btn.append(el("span", "n", ""));
     btn.onclick = () => { tab = key; reset(); };
@@ -588,6 +621,7 @@ function setup() {
 
   $("opensettings").onclick = () => { drawSettings(); $("settings").showModal(); };
   $("closesettings").onclick = () => $("settings").close();
+  $("calm").onchange = () => { prefs.calm = $("calm").checked; savePrefs(); reset(); };
   $("closeorganize").onclick = () => $("organize").close();
   $("organize").addEventListener("close", () => { fillCatMenus(); render(); });   // show what changed, keep your place
   for (const d of [$("settings"), $("organize")]) d.addEventListener("click", e => { if (e.target === d) d.close(); });

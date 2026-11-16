@@ -8,6 +8,7 @@ Writes  docs/data.json    (what the page shows)
 
 Standard library only.  Run:  python3 build.py
 """
+import concurrent.futures
 import datetime
 import html as htmllib
 import json
@@ -126,8 +127,8 @@ def gender(text, ptype):
     both = text + " " + ptype
     if re.search(r"\b(kids|kid['’]s|youth|toddlers?|infants?)\b", both) or re.search(r"\b(boys|girls)\b", ptype):
         return "k"
-    w = re.search(r"\b(wom[ae]n['’]?s?|wmns|ladies|skirts?|blouses?|dress(es)?(?! (shirt|pant|shoe|sock|trouser|boot)))\b", both)
-    m = re.search(r"\bmen['’]?s?\b", both) or re.search(r"\bman\b", ptype)
+    w = re.search(r"\b(wom[ae]n['’]?s?|wmns|ladies|donna|skirts?|gonn[ae]|blouses?|dress(es)?(?! (shirt|pant|shoe|sock|trouser|boot)))\b", both)
+    m = re.search(r"\b(men['’]?s?|uomo)\b", both) or re.search(r"\bman\b", ptype)
     return "w" if w and not m else "m" if m and not w else None
 
 
@@ -313,19 +314,21 @@ def link_item(host, url, note=""):
 # type, then by its title. First match wins, so order matters: "Knit Cap" is a
 # hat, "Wallet Pants" are pants, "Deck Jacket" is a jacket.
 RULES = [(re.compile(r"\b(%s)\b" % rx, re.I), cat) for rx, cat in [
-    (r"hats?|caps?|beanies?|berets?|balaclavas?|headwear|socks?|gloves?|mitt(s|ens)?|scar(f|ves)|leg warmers",
-     "clothing/accessories"),
-    (r"shoes?|sneakers?|boots?|sandals?|loafers?|footwear|slippers?|mules?|clogs?|(low|mid|high)[- ]tops?",
-     "clothing/footwear"),
-    (r"pants?|sweatpants?|trackpants?|\w*shorts|jeans?|trousers?|tights|leggings|skirts?|bottoms?|full-length",
-     "clothing/bottoms"),
+    (r"hats?|caps?|beanies?|berets?|balaclavas?|headwear|socks?|gloves?|mitt(s|ens)?|scar(f|ves)|leg warmers"
+     r"|cappell[oi]|sciarp[ae]|calz(e|ini)|guanti", "clothing/accessories"),
+    (r"shoes?|sneakers?|boots?|sandals?|loafers?|footwear|slippers?|mules?|clogs?|(low|mid|high)[- ]tops?"
+     r"|scarp[ae]|stival(i|etti)|sandali|mocassini|d[eé]collet[eé]s?|pumps|ballerin[ae]|espadrilles?", "clothing/footwear"),
+    (r"pants?|sweatpants?|trackpants?|\w*shorts|jeans?|trousers?|tights|leggings|skirts?|bottoms?|full-length"
+     r"|pantalon[ei]|gonn[ae]|bermuda", "clothing/bottoms"),
     (r"jackets?|jkt|coats?|blazers?|bombers?|outerwear|outer|parkas?|blousons?|vests?|anoraks?|windbreakers?"
-     r"|puffers?|down-insulated|shell", "clothing/outerwear"),
+     r"|puffers?|down-insulated|shell|giacc(a|he)|giubb(ino|ini|otto|otti)|cappott[oi]|piumin[oi]|gilet|trench|ponchos?",
+     "clothing/outerwear"),
     (r"\w*shirts?|shirting|tees?|(?<!['’])t|polos?|hood(s|y|ie|ies)?|hooded|sweats?|sweaters?|knit(s|wear)?|cardigans?"
      r"|crew ?necks?|pullovers?|long sleeve|button[- ]downs?|thermals?|tops?|tracktops?|jersey|tank|henley|rugby"
-     r"|fleece", "clothing/tops"),
+     r"|fleece|magli(a|e|one|oni|eria)|camici[ae]|felp[ae]|girocollo|blouses?|bodysuits?", "clothing/tops"),
     (r"bags?|totes?|backpacks?|pouch(es)?|wallets?|belts?|ties?|sunglasses|eyewear|jewel(le)?ry|necklaces?"
-     r"|bracelets?|rings?|watch(es)?|keychains?|bandanas?|leather goods", "clothing/accessories"),
+     r"|bracelets?|rings?|watch(es)?|keychains?|bandanas?|leather goods|clutch(es)?|card ?holders?|earrings?"
+     r"|bors[ae]|cintur[ae]|portafogli[o]?|occhiali|collan[ae]|braccial[ei]|anell[oi]|orecchini|gioielli", "clothing/accessories"),
     (r"skateboards?|decks?|wheels?|trucks?|bearings?|grip ?tape|bushings?|hardware|hard goods|tools?|completes?"
      r"|snowboards?", "skate"),
     (r"blankets?|throws?|towels?|pillows?|drinkware|tableware|candles?|apothecary|publications?|books?|magazines?"
@@ -507,6 +510,7 @@ def main():
     settings = cfg.get("settings", {})
     min_off = settings.get("min_discount", 20)
     max_pages = settings.get("max_pages", 20)
+    max_items = settings.get("max_items_per_store", 750)
     DELAY = settings.get("delay_seconds", 1.0)
     stores = {s["host"]: s for s in cfg["stores"]}
 
@@ -550,49 +554,68 @@ def main():
         if tag not in cur["tags"]:
             cur["tags"].append(tag)
 
-    for host, store in stores.items():
-        name = store.get("name", host)
-        errors, before = [], len(items)
+    def fetch_store(host):
+        """Everything wanted from one store: (item, tag) pairs, errors, and how many items qualified.
+
+        Stores are fetched on separate threads; requests to any one store stay
+        sequential and spaced out.
+        """
+        store, found, errors, listed = stores[host], [], [], []
         wanted = set(wish_products.get(host, set()))
         print(f"{host} ...", flush=True)
+        try:
+            if store["platform"] == "shopify":
+                if store.get("browse") or wanted:
+                    store["currency"] = served_currency(host) or store.get("currency", "USD")
+                if store.get("browse"):
+                    try:
+                        for p in shopify_feed(host, "", max_pages):
+                            it = shopify_item(host, p)
+                            if not it:
+                                continue
+                            if p.get("handle") in wanted:
+                                found.append((it, "wish"))
+                                wanted.discard(p.get("handle"))
+                            # "all": true lists the store's whole in-stock range, not only its discounts
+                            if it["avail"] and (it["off"] >= min_off or store.get("all")):
+                                listed.append(it)
+                    except Exception as e:
+                        errors.append(f"catalog: {e}")
+                    # A few stores would swamp the rest, so keep each store's deepest discounts.
+                    listed.sort(key=lambda it: -it["off"])
+                    found += [(it, "sale" if it["off"] >= min_off else "full") for it in listed[:max_items]]
+                for handle in sorted(wanted):
+                    url = f"https://{host}/products/{handle}"
+                    try:
+                        found.append((shopify_single(host, handle), "wish"))
+                    except Gone:  # taken down by the store: not our error
+                        found.append((link_item(host, url, "No longer listed"), "wish"))
+                    except Exception as e:
+                        errors.append(f"{handle}: {e}")
+                        found.append((link_item(host, url, "could not read price"), "wish"))
 
-        if store["platform"] == "shopify":
-            if store.get("browse") or wanted:
-                store["currency"] = served_currency(host) or store.get("currency", "USD")
-            if store.get("browse"):
-                try:
-                    for p in shopify_feed(host, "", max_pages):
-                        it = shopify_item(host, p)
-                        if not it:
-                            continue
-                        if p.get("handle") in wanted:
-                            add(it, "wish")
-                            wanted.discard(p.get("handle"))
-                        if it["off"] >= min_off and it["avail"]:
-                            add(it, "sale")
-                except Exception as e:
-                    errors.append(f"catalog: {e}")
-            for handle in sorted(wanted):
-                url = f"https://{host}/products/{handle}"
-                try:
-                    add(shopify_single(host, handle), "wish")
-                except Gone:  # taken down by the store: not our error
-                    add(link_item(host, url, "No longer listed"), "wish")
-                except Exception as e:
-                    errors.append(f"{handle}: {e}")
-                    add(link_item(host, url, "could not read price"), "wish")
+            for url in wish_pages.get(host, []):
+                if store["platform"] == "page":
+                    try:
+                        found.append((page_item(host, url), "wish"))
+                        continue
+                    except Gone:
+                        found.append((link_item(host, url, "No longer listed"), "wish"))
+                        continue
+                    except Exception as e:
+                        errors.append(f"{url[-40:]}: {e}")
+                found.append((link_item(host, url), "wish"))
+        except Exception as e:  # never let one store take the whole build down
+            errors.append(f"unexpected: {e}")
+        return found, errors, len(listed)
 
-        for url in wish_pages.get(host, []):
-            if store["platform"] == "page":
-                try:
-                    add(page_item(host, url), "wish")
-                    continue
-                except Gone:
-                    add(link_item(host, url, "No longer listed"), "wish")
-                    continue
-                except Exception as e:
-                    errors.append(f"{url[-40:]}: {e}")
-            add(link_item(host, url), "wish")
+    with concurrent.futures.ThreadPoolExecutor(settings.get("workers", 6)) as pool:
+        results = list(pool.map(fetch_store, list(stores)))
+
+    for (host, store), (found, errors, qualified) in zip(stores.items(), results):
+        name, before = store.get("name", host), len(items)
+        for item, tag in found:
+            add(item, tag)
 
         # If a store failed completely, keep what we showed last time.
         got = len(items) - before
@@ -602,8 +625,9 @@ def main():
                     old["stale"] = True
                     items[old["id"]] = old
         if store["platform"] != "link" or errors:
-            status.append({"host": host, "name": name, "ok": not errors,
-                           "count": len(items) - before, "errors": errors[:5]})
+            # "qualified" is the number before the per-store cap; the page uses it to spot high-volume stores
+            status.append({"host": host, "name": name, "ok": not errors, "count": len(items) - before,
+                           "qualified": max(qualified, len(items) - before), "errors": errors[:5]})
 
     # ---- decorate: store info, category, sizes, US dollar price, price history
     prices = state.get("prices", {})
@@ -624,6 +648,8 @@ def main():
                     kind = kind or s.get("kind", "other")
             it["group"], it["kind"] = group, kind or None
         it["cur"] = it.get("cur") or s.get("currency", "USD")
+        if not it.get("g") and s.get("fits"):    # a women's or men's boutique: unlabelled items are that
+            it["g"] = {"women": "w", "men": "m"}[s["fits"]]
         if not it.get("g"):
             it.pop("g", None)
         every =it.pop("sizes_all", None) or it["sizes"]

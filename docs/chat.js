@@ -39,7 +39,7 @@ Style: direct and conversational, like a knowledgeable friend. Lead with the ans
 const TOOLS = [
   {
     name: "search_site_items",
-    description: "Search the items currently listed on the site. Use this before recommending anything. Every filter is optional; combine them to narrow down. Returns the number of matches and the top results with price, discount, sizes in stock and a link. Stores and brands the person marked as not interested are left out.",
+    description: "Search the items currently listed on the site. Use this before recommending anything. Every filter is optional; combine them to narrow down. Returns the number of matches and the top results with price, discount, sizes in stock and a link. Stores and brands the person hid on the site are left out.",
     eager_input_streaming: true,
     input_schema: {
       type: "object",
@@ -121,7 +121,7 @@ function searchItems(a) {
   const words = (a.query || "").toLowerCase().split(/\s+/).filter(Boolean), has = (text, part) => !part || (text || "").toLowerCase().includes(part.toLowerCase());
   const gen = { men: "m", women: "w" }[a.fits], brands = followedBrands(pool());
   const list = DATA.items.filter(i => {
-    if (ruledOut(i)) return false;
+    if (ruledOut(i) || crowdedOut(i)) return false;
     const text = (i.title + " " + (i.brand || "") + " " + i.store_name + " " + i.group + " " + (i.kind || "")).toLowerCase();
     return words.every(w => text.includes(w)) &&
       (!a.category || i.group === a.category || i.group + "/" + i.kind === a.category) &&
