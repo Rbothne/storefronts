@@ -87,6 +87,35 @@
   .chips input { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line);
                  border-radius: 6px; padding: 3px 8px; width: 130px; }
   .chips .meta { align-self: center; }
+  #chat { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 100vw); z-index: 20; display: flex;
+          flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0, 0, 0, .18); }
+  #chat[hidden], #chatstarters[hidden], #chatsetup[hidden], #chatform[hidden] { display: none; }
+  .chathead { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .chathead strong { flex: 1; }
+  .chathead label { color: var(--muted); display: flex; gap: 4px; align-items: center; }
+  .chathead .pill { padding: 4px 10px; }
+  #chatlog { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { overflow-wrap: anywhere; }
+  .msg.user { align-self: flex-end; max-width: 85%; background: var(--accent); color: var(--bg); padding: 7px 11px;
+              border-radius: 12px 12px 2px 12px; white-space: pre-wrap; }
+  .msg.note, .msg .note { color: var(--muted); font-size: 12px; }
+  .md p { margin: 0 0 8px; }
+  .md ul, .md ol { margin: 0 0 8px; padding-left: 20px; }
+  .md h4 { margin: 10px 0 4px; font-size: 14px; }
+  .md table { border-collapse: collapse; margin: 0 0 8px; font-size: 12px; display: block; overflow-x: auto; }
+  .md th, .md td { border: 1px solid var(--line); padding: 3px 6px; text-align: left; vertical-align: top; }
+  .md code { background: var(--chip); padding: 0 4px; border-radius: 4px; }
+  .md a { color: var(--accent); }
+  .chatitems { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 0 0 8px; }
+  #chatstarters, #chatsetup, #chatform { padding: 8px 12px; }
+  #chatsetup, #chatform { border-top: 1px solid var(--line); }
+  #chatsetup p { margin: 0 0 8px; }
+  #chatsetup a { color: var(--accent); }
+  #chat .row { display: flex; gap: 8px; align-items: flex-end; margin: 6px 0; }
+  #chat textarea, #chat input[type=password] { flex: 1; resize: none; font: inherit; color: var(--ink); background: var(--card);
+                                               border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; min-width: 0; }
+  #chatstatus { color: var(--muted); font-size: 12px; min-height: 16px; }
+  #chat details { color: var(--muted); font-size: 12px; margin-top: 4px; }
   dialog .bar { display: flex; gap: 8px; justify-content: space-between; margin-top: 14px; }
 </style>
 </head>
@@ -116,6 +145,7 @@
     <label><input type="checkbox" id="stock"> In stock</label>
     <label><input type="checkbox" id="mysizes"> My sizes</label>
     <button class="pill" id="opensettings">Sizes &amp; categories</button>
+    <button class="pill" id="openchat">Ask the assistant</button>
   </div>
 </header>
 <main>
@@ -124,6 +154,39 @@
   <button id="more" hidden>Show more</button>
 </main>
 <footer id="foot"></footer>
+
+<aside id="chat" hidden aria-label="Shopping assistant">
+  <div class="chathead">
+    <strong>Shopping assistant</strong>
+    <label title="Let the assistant search the web and open links. The site's own items always come first."><input type="checkbox" id="chatweb"> Web</label>
+    <button class="pill" id="newchat">New chat</button>
+    <button class="pill" id="closechat" aria-label="Close the assistant">✕</button>
+  </div>
+  <div id="chatlog" aria-live="polite"></div>
+  <div id="chatstarters" class="chips">
+    <button>What are the best deals in my sizes right now?</button>
+    <button>Anything good from the brands I follow?</button>
+    <button>Find me black trousers under $200</button>
+  </div>
+  <div id="chatsetup">
+    <p><strong>Connect your own Claude API key.</strong> The assistant runs on Anthropic's API, which is billed per use and is
+       separate from a claude.ai subscription. Create a key in the
+       <a href="https://platform.claude.com/" target="_blank" rel="noopener noreferrer">Claude Console</a>, then paste it here.</p>
+    <p>The key is saved in this browser only and is sent only to Anthropic. It is not part of the site, so other visitors cannot use it.</p>
+    <div class="row"><input type="password" id="chatkey" placeholder="sk-ant-…" autocomplete="off" aria-label="Claude API key">
+      <button class="pill" id="savekey">Save key</button></div>
+  </div>
+  <div id="chatform">
+    <div id="chatstatus"></div>
+    <div class="row"><textarea id="chatinput" rows="2" placeholder="Ask about items, sizes or a link…" aria-label="Message"></textarea>
+      <button class="pill" id="chatsend">Send</button></div>
+    <div id="chatcost" class="meta"></div>
+    <details><summary>API key and model</summary>
+      <div class="row"><select id="chatmodel" aria-label="Model"></select></div>
+      <div class="row"><span id="chatkeystate"></span><button class="pill" id="forgetkey">Remove key</button></div>
+    </details>
+  </div>
+</aside>
 
 <dialog id="settings">
   <h2>My sizes</h2>
@@ -142,6 +205,10 @@
   <p>Stores and brands you hid with ⋯ on a card. Click one to bring it back.</p>
   <div class="row"><span>Stores</span><div class="chips" id="hiddenlist"></div></div>
   <div class="row"><span>Brands</span><div class="chips" id="mutedlist"></div></div>
+
+  <h2>What the assistant remembers</h2>
+  <p>Preferences the shopping assistant saved from your chats. Click one to delete it.</p>
+  <div class="chips" id="noteslist"></div>
 
   <h2>Followed items</h2>
   <p>Stars are saved in this browser and only tracked while the item is on sale. To track one permanently
@@ -172,6 +239,7 @@ let DATA = { items: [], status: [] }, IDS = new Set(), tab = "wish", shown = PAG
 //   itemCats   your categories per item id; kept holds the copy of each categorised item
 //   storeCats  your categories per store host
 //   hidden     stores you are not interested in;  muted  brands you are not interested in
+//   notes      preferences the shopping assistant saved (the API key is stored separately, never in here)
 let prefs;
 const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -179,7 +247,7 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 function loadPrefs(text) {
   const p = JSON.parse(text);
   prefs = { follows: p.follows || {}, itemCats: p.itemCats || {}, kept: p.kept || {}, storeCats: p.storeCats || {},
-            hidden: p.hidden || {}, muted: p.muted || {}, gender: p.gender || "",
+            hidden: p.hidden || {}, muted: p.muted || {}, gender: p.gender || "", notes: p.notes || [],
             sizes: { tops: [], bottoms: [], shoes: [], ...(p.sizes || {}) } };
 }
 function savePrefs() { try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch (e) {} }
@@ -471,6 +539,12 @@ function drawSettings() {
     if (!rows.length) box.append(el("span", "meta", "None hidden."));
   };
   restoreList($("hiddenlist"), prefs.hidden); restoreList($("mutedlist"), prefs.muted);
+  $("noteslist").replaceChildren(...prefs.notes.map(note => {
+    const b = el("button", null, note + " ✕"); b.title = "Delete this note";
+    b.onclick = () => { prefs.notes = prefs.notes.filter(n => n !== note); savePrefs(); drawSettings(); };
+    return b;
+  }));
+  if (!prefs.notes.length) $("noteslist").append(el("span", "meta", "Nothing saved yet."));
   $("backup").value = JSON.stringify(prefs);
 }
 
@@ -545,5 +619,6 @@ fetch("data.json", { cache: "no-store" })
   .catch(() => { $("grid").replaceChildren(el("div", "empty",
     "No data yet. Run the “Update listings” workflow once from the Actions tab.")); });
 </script>
+<script src="chat.js"></script>
 </body>
 </html>

@@ -5,7 +5,7 @@ A personal page that pulls sale items and wishlist prices from many shops.
 - `wishlist.txt`  one URL per line: product pages to follow and price-track.
 - `stores.json`   one entry per store. `platform` is `shopify` (open feed), `page` (read price from the product page) or `link` (just a link card). `browse: true` scans the whole store for sale items. `group` is the store's category; items from `clothing` stores, and from stores marked `"mixed": true`, are sorted one by one into tops, bottoms, skate gear and so on (rules in `build.py`), with `kind` as the fallback for items no rule matches.
 - `build.py`      fetches everything and writes `docs/data.json`. Standard library only.
-- `docs/`         the page GitHub Pages serves.
+- `docs/`         the page GitHub Pages serves. `docs/chat.js` is the shopping assistant; `docs/vendor/` holds the official Anthropic SDK bundled into one file (see the note there).
 - `.github/workflows/update.yml`  runs `build.py` twice a day and commits the result.
 
 On the page:
@@ -17,6 +17,7 @@ On the page:
 - **Best deals** sorts by discount plus bonuses for followed brands, your size, a lowest-tracked price and new arrivals (weights in `score()` in `docs/index.html`).
 - **Price history**: `data/state.json` keeps a point each time any item's price changes (items unseen for 90 days are dropped). Cards show a small chart once an item has more than one price.
 - Stars, categories, sizes and hidden stores and brands live in the browser; the Backup box in the panel copies them to another device.
+- **Ask the assistant** opens a chat with Claude that searches the site's items, knows your sizes, follows and categories, shows item cards in the conversation and remembers preferences you tell it. It needs your own Anthropic API key, pasted into the panel: the key is kept in that browser only (separate from the Backup box) and is sent only to Anthropic, so it is never part of the site or the repository and nobody else can use it. The Web switch lets it search the web and open links; the site's own items always come first.
 - Prices in other currencies also show an approximate US dollar value, using rates fetched from open.er-api.com at build time.
 
 Run locally:
