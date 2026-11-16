@@ -1,0 +1,678 @@
+#!/usr/bin/env python3
+"""Build docs/data.json for the wishlist / sale page.
+
+Reads   stores.json   (which stores, how to read them)
+        wishlist.txt  (one URL per line: product pages or Shopify collection pages)
+Writes  docs/data.json    (what the page shows)
+        data/state.json   (first-seen date and price changes for every item)
+
+Standard library only.  Run:  python3 build.py
+"""
+import datetime
+import html as htmllib
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from urllib.parse import unquote, urlparse
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
+TODAY = datetime.date.today().isoformat()
+DELAY = 1.0
+
+
+# ---------------------------------------------------------------- fetching
+
+def get(url, timeout=25, tries=2):
+    """Return (status, text). Never raises."""
+    for attempt in range(tries):
+        req = urllib.request.Request(url, headers={
+            "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "application/json,text/html;q=0.9,*/*;q=0.8"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                # generous cap: one 250-product feed page can run to 16 MB (All Volleyball)
+                body = r.read(40_000_000).decode("utf-8", "replace")
+                time.sleep(DELAY)
+                return r.status, body
+        except urllib.error.HTTPError as e:
+            status = e.code
+            if status in (429, 500, 502, 503, 504) and attempt + 1 < tries:
+                time.sleep(15)
+                continue
+            time.sleep(DELAY)
+            return status, ""
+        except Exception as e:  # DNS, TLS, timeout
+            if attempt + 1 < tries:
+                time.sleep(5)
+                continue
+            return 0, str(e)
+    return 0, ""
+
+
+class Gone(Exception):
+    """The store answered 404: the listing has been taken down."""
+
+
+def load_json(path, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+# ---------------------------------------------------------------- shopify
+
+def num(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def shopify_item(host, p, cents=False):
+    """Normalise one product from products.json (dollars) or /products/x.js (cents)."""
+    div = 100.0 if cents else 1.0
+    variants = p.get("variants") or []
+    live = [v for v in variants if v.get("available")] or variants
+    priced = [(num(v.get("price")), num(v.get("compare_at_price"))) for v in live]
+    priced = [(a / div, (b / div if b else None)) for a, b in priced if a is not None]
+    if not priced:
+        return None
+    price, was = min(priced, key=lambda t: t[0])
+    off = round((was - price) / was * 100) if was and was > price else 0
+
+    img = ""
+    images = p.get("images") or []
+    if images:
+        first = images[0]
+        img = first.get("src", "") if isinstance(first, dict) else str(first)
+    if img.startswith("//"):
+        img = "https:" + img
+
+    sizes, sizes_all = size_labels(p)
+    tags = p.get("tags") or []
+    tags = tags.split(",") if isinstance(tags, str) else tags
+    return {
+        "g": gender(" ".join([p.get("title") or "", p.get("vendor") or "", *map(str, tags)]),
+                    p.get("product_type") or p.get("type") or ""),
+        "id": f"{host}/{p.get('handle')}",
+        "store": host,
+        "title": p.get("title", ""),
+        "brand": p.get("vendor", ""),
+        "url": f"https://{host}/products/{p.get('handle')}",
+        "img": img,
+        "price": round(price, 2),
+        "was": round(was, 2) if off else None,
+        "off": off,
+        "avail": any(v.get("available") for v in variants),
+        "sizes": sizes[:14],
+        "sizes_all": sizes_all,  # used to work out the size scale, then dropped
+        "tags": [],
+        # products.json calls it product_type, /products/x.js calls it type
+        "ptype": p.get("product_type") or p.get("type") or "",
+    }
+
+
+def gender(text, ptype):
+    """"w", "m" or "k" (kids) when the listing says so; None for unisex or unlabelled."""
+    text, ptype = text.lower(), ptype.lower()
+    both = text + " " + ptype
+    if re.search(r"\b(kids|kid['’]s|youth|toddlers?|infants?)\b", both) or re.search(r"\b(boys|girls)\b", ptype):
+        return "k"
+    w = re.search(r"\b(wom[ae]n['’]?s?|wmns|ladies|skirts?|blouses?|dress(es)?(?! (shirt|pant|shoe|sock|trouser|boot)))\b", both)
+    m = re.search(r"\bmen['’]?s?\b", both) or re.search(r"\bman\b", ptype)
+    return "w" if w and not m else "m" if m and not w else None
+
+
+def size_labels(p):
+    """Return (in-stock size labels, all size labels) for a Shopify product.
+
+    Variant titles mix options ("Black / M"), so read the option that holds the
+    size when the product names one; otherwise fall back to the full title.
+    """
+    names = [(o.get("name") if isinstance(o, dict) else o) or "" for o in p.get("options") or []]
+    idx = next((i for i, n in enumerate(names) if re.search(r"size|サイズ|waist", str(n), re.I)), None)
+    if idx is None and len(names) == 1:
+        idx = 0
+    key = f"option{idx + 1}" if idx is not None else "title"
+    live, every = [], []
+    for v in p.get("variants") or []:
+        label = str(v.get(key) or "").strip()
+        if not label or label == "Default Title":
+            continue
+        if label not in every:
+            every.append(label)
+        if v.get("available") and label not in live:
+            live.append(label)
+    return live, every
+
+
+def shopify_feed(host, path, max_pages):
+    """Yield raw products from a paginated Shopify feed. Raises on first-page failure."""
+    for page in range(1, max_pages + 1):
+        status, body = get(f"https://{host}{path}/products.json?limit=250&page={page}")
+        try:
+            products = json.loads(body).get("products", []) if status == 200 else None
+        except Exception:
+            products = None
+        if products is None:
+            if page == 1:
+                raise RuntimeError(f"feed returned HTTP {status}")
+            return
+        if not products:
+            return
+        yield from products
+        if len(products) < 250:
+            return
+
+
+def shopify_single(host, handle):
+    url = f"https://{host}/products/{handle}"
+    status, body = get(url + ".js")
+    if status == 404:
+        raise Gone()
+    if status != 200:
+        raise RuntimeError(f"HTTP {status}")
+    try:
+        data = json.loads(body)
+    except ValueError:
+        # Custom storefronts on top of Shopify (Cav Empt) answer .js with the
+        # ordinary HTML product page, so read that instead. A removed product
+        # still answers 200 with only the site name as title; the URL slug
+        # makes a better card title than that.
+        item = page_item(host, url)
+        return item if item["price"] is not None else link_item(host, url, "Price not readable on this page")
+    return shopify_item(host, data, cents=True)
+
+
+# ---------------------------------------------------------------- generic pages
+
+def meta(page, key):
+    m = re.search(r'<meta[^>]+(?:property|name)=["\']%s["\'][^>]*content=["\']([^"\']*)' % re.escape(key), page, re.I) \
+        or re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:property|name)=["\']%s["\']' % re.escape(key), page, re.I)
+    return htmllib.unescape(m.group(1)).strip() if m else ""
+
+
+def jsonld_product(page):
+    for block in re.findall(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', page, re.S | re.I):
+        try:
+            data = json.loads(block.strip())
+        except Exception:
+            continue
+        stack = [data]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, list):
+                stack.extend(node)
+            elif isinstance(node, dict):
+                types = node.get("@type")
+                types = types if isinstance(types, list) else [types]
+                if "Product" in types or "ProductGroup" in types:
+                    return node
+                stack.extend(v for v in node.values() if isinstance(v, (dict, list)))
+    return None
+
+
+SYMBOLS = {"¥": "JPY", "￥": "JPY", "£": "GBP", "€": "EUR", "$": ""}  # "$" = the store's own dollar
+
+
+def page_item(host, url):
+    """Read title / image / price from a product page.
+
+    Pages with a title but no readable price come back as a link card.
+    """
+    status, page = get(url)
+    if status == 404:
+        raise Gone()
+    if status != 200:
+        raise RuntimeError(f"HTTP {status}")
+    title, img, price, cur, avail = meta(page, "og:title"), meta(page, "og:image"), None, "", None
+    node = jsonld_product(page)
+    if node:
+        title = str(node.get("name") or title)
+        image = node.get("image")
+        if isinstance(image, list) and image:
+            image = image[0]
+        if isinstance(image, dict):
+            image = image.get("url")
+        img = str(image or img)
+        offers = node.get("offers") or {}
+        offers = offers if isinstance(offers, list) else [offers]
+        flat = []
+        for o in offers:
+            if isinstance(o, dict):
+                flat.extend(o.get("offers") if isinstance(o.get("offers"), list) else [o])
+        best = None
+        for o in flat:
+            p = num(o.get("price") if o.get("price") is not None else o.get("lowPrice"))
+            if p is not None and (best is None or p < best[0]):
+                best = (p, o)
+        if best:
+            price, cur = best[0], str(best[1].get("priceCurrency", ""))
+        states = [str(o.get("availability", "")) for o in flat if o.get("availability")]
+        if states:
+            avail = any(s.rsplit("/", 1)[-1].lower() in
+                        ("instock", "limitedavailability", "onlineonly", "preorder", "presale", "backorder")
+                        for s in states)
+    if price is None:
+        price = num(meta(page, "product:price:amount") or meta(page, "og:price:amount"))
+        cur = meta(page, "product:price:currency") or meta(page, "og:price:currency")
+    if price is None:
+        # Last resort: a visible price, e.g. <div class="price">$225</div>
+        m = re.search(r'class=["\'][^"\']*\bprice\b[^"\']*["\'][^>]*>\s*([$¥￥£€])\s*([\d,]+(?:\.\d+)?)', page, re.I)
+        if m:
+            price, cur = num(m.group(2).replace(",", "")), SYMBOLS[m.group(1)]
+    if not title:
+        m = re.search(r"<title[^>]*>(.*?)</title>", page, re.S | re.I)
+        title = htmllib.unescape(m.group(1)).strip() if m else ""
+    if img.startswith("//"):
+        img = "https:" + img
+    if not title:
+        raise RuntimeError("no title or price found in page")
+    item = {"id": url, "store": host, "title": title, "brand": "", "url": url, "img": img,
+            "price": price, "was": None, "off": 0, "avail": avail, "sizes": [],
+            "cur": cur or None, "tags": []}
+    if price is None:
+        item.update(link_only=True, note="Price not readable on this page")
+    return item
+
+
+def link_item(host, url, note=""):
+    slug = unquote(urlparse(url).path.rstrip("/").rsplit("/", 1)[-1])
+    slug = re.sub(r"\.html?$|\.php$", "", slug)
+    title = re.sub(r"[-_]+", " ", slug).strip().title() or host
+    return {"id": url, "store": host, "title": title, "brand": "", "url": url, "img": "",
+            "price": None, "was": None, "off": 0, "avail": None, "sizes": [],
+            "tags": [], "link_only": True, "note": note}
+
+
+# ---------------------------------------------------------------- categories
+
+# A store's "group" in stores.json is only a default: clothing stores also sell
+# skate decks, planners and blankets. These rules sort each item by its product
+# type, then by its title. First match wins, so order matters: "Knit Cap" is a
+# hat, "Wallet Pants" are pants, "Deck Jacket" is a jacket.
+RULES = [(re.compile(r"\b(%s)\b" % rx, re.I), cat) for rx, cat in [
+    (r"hats?|caps?|beanies?|berets?|balaclavas?|headwear|socks?|gloves?|mitt(s|ens)?|scar(f|ves)|leg warmers",
+     "clothing/accessories"),
+    (r"shoes?|sneakers?|boots?|sandals?|loafers?|footwear|slippers?|mules?|clogs?|(low|mid|high)[- ]tops?",
+     "clothing/footwear"),
+    (r"pants?|sweatpants?|trackpants?|\w*shorts|jeans?|trousers?|tights|leggings|skirts?|bottoms?|full-length",
+     "clothing/bottoms"),
+    (r"jackets?|jkt|coats?|blazers?|bombers?|outerwear|outer|parkas?|blousons?|vests?|anoraks?|windbreakers?"
+     r"|puffers?|down-insulated|shell", "clothing/outerwear"),
+    (r"\w*shirts?|shirting|tees?|(?<!['’])t|polos?|hood(s|y|ie|ies)?|hooded|sweats?|sweaters?|knit(s|wear)?|cardigans?"
+     r"|crew ?necks?|pullovers?|long sleeve|button[- ]downs?|thermals?|tops?|tracktops?|jersey|tank|henley|rugby"
+     r"|fleece", "clothing/tops"),
+    (r"bags?|totes?|backpacks?|pouch(es)?|wallets?|belts?|ties?|sunglasses|eyewear|jewel(le)?ry|necklaces?"
+     r"|bracelets?|rings?|watch(es)?|keychains?|bandanas?|leather goods", "clothing/accessories"),
+    (r"skateboards?|decks?|wheels?|trucks?|bearings?|grip ?tape|bushings?|hardware|hard goods|tools?|completes?"
+     r"|snowboards?", "skate"),
+    (r"blankets?|throws?|towels?|pillows?|drinkware|tableware|candles?|apothecary|publications?|books?|magazines?"
+     r"|planners?|calendars?|notebooks?|notepads?|paper|writing|pens?|pencils?|desktop|storage|stickers?|cards?"
+     r"|toys?|figures?|home|lifestyle|personal care|incense|mugs?|cups?|fabric|soft goods|stationery", "home"),
+    (r"accessor(y|ies)", "clothing/accessories"),
+    (r"denim", "clothing/bottoms"),
+]]
+
+
+def categorize(*texts):
+    """Return "group" or "group/kind" for the first text any rule matches, else None."""
+    for text in texts:
+        for rx, cat in RULES:
+            if rx.search(text or ""):
+                return cat
+    return None
+
+
+# ---------------------------------------------------------------- sizes
+
+# Stores write the same size many ways ("LG", "Large", "50 (Large)", "3").
+# size_tokens() turns the in-stock sizes of an item into comparable tokens:
+#   tops / outerwear  letter sizes        "M"
+#   bottoms           letter sizes or waist in inches   "M" / "32"
+#   footwear          US men's sizes      "9.5"
+# The page matches these against the sizes you pick in Settings.
+
+SIZED = ("tops", "outerwear", "bottoms", "footwear")
+LETTERS = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"]
+ALPHA = {
+    "xxs": "XXS", "2xs": "XXS", "xxsmall": "XXS",
+    "xs": "XS", "xsmall": "XS", "extrasmall": "XS",
+    "s": "S", "sm": "S", "small": "S",
+    "m": "M", "md": "M", "med": "M", "medium": "M",
+    "l": "L", "lg": "L", "large": "L",
+    "xl": "XL", "xlg": "XL", "xlarge": "XL", "extralarge": "XL",
+    "xxl": "XXL", "2xl": "XXL", "2x": "XXL", "xxlarge": "XXL", "extraextralarge": "XXL",
+    "xxxl": "XXXL", "3xl": "XXXL", "3x": "XXXL", "xxxlarge": "XXXL", "extraextraextralarge": "XXXL",
+}
+ONE_SIZE = {"os", "osfa", "onesize", "onesizefitsall", "free", "freesize", "f", "one"}
+JAPAN = {0: "XXS", 1: "XS", 2: "S", 3: "M", 4: "L", 5: "XL", 6: "XXL"}  # Japanese 1-5 sizing: 3 is a medium
+
+
+def compact(text):
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def alpha(label):
+    """Letter sizes in a label: "LG" -> L, "x-large" -> XL, "50 (Large)" -> L, "1-S/M" -> S and M."""
+    low = label.lower()
+    for whole in [low, re.sub(r"\([^)]*\)", "", low)] + re.findall(r"\(([^)]*)\)", low):
+        if compact(whole) in ALPHA:
+            return {ALPHA[compact(whole)]}
+    found = set()
+    for chunk in re.split(r"[\s/,()]+", low):
+        parts = [chunk] if compact(chunk) in ALPHA else chunk.split("-")   # keep "x-small" whole
+        found |= {ALPHA[compact(p)] for p in parts if compact(p) in ALPHA}
+    return found
+
+
+def number(label):
+    m = re.search(r"\d+(?:\.\d+)?", label.replace("½", ".5").replace(" 1/2", ".5"))
+    return float(m.group(0)) if m else None
+
+
+def band(n, start, width, first):
+    """Letter size for n on an evenly spaced scale: start is the smallest value of size `first`."""
+    i = LETTERS.index(first) + int((n - start) // width)
+    return {LETTERS[i]} if 0 <= i < len(LETTERS) else set()
+
+
+def clothing_size(kind, n, scale):
+    """Tokens for a bare number, read against every number the item is sold in."""
+    if n <= 6 and max(scale) <= 6:
+        return {JAPAN[int(n)]}
+    if kind == "bottoms":
+        if 26 <= n < 44:
+            return {str(int(n))}                    # waist in inches
+        if 66 <= n <= 112:
+            return {str(round(n / 2.54))}           # waist in cm
+        return band(n, 44, 2, "XS") if 44 <= n < 60 else set()   # European 44-58
+    if 14 <= n < 19:
+        return band(n, 14, 1, "S")                  # shirt collar in inches
+    if 34 <= n < 60:
+        european, chest = band(n, 44, 2, "XS"), band(n, 34, 2, "XS")   # 48 = M; 38 chest = M
+        if n >= 48 or (n >= 44 and max(scale) >= 48):
+            return european
+        if n < 44 or min(s for s in scale if s >= 34) <= 42:
+            return chest
+        return european | chest                     # only 44/46 on offer: could be either
+    return set()
+
+
+def shoe_us(label):
+    """Candidate US men's sizes for a shoe label: "EU 43" -> 9.5 and 10, "27.5 cm" -> 9.5, "UK 8" -> 8.5 and 9."""
+    low = label.lower().replace("½", ".5").replace(" 1/2", ".5")
+    n = r"(\d+(?:\.\d+)?)"
+
+    def find(*patterns):
+        for p in patterns:
+            m = re.search(p, low)
+            if m:
+                return float(m.group(1))
+        return None
+
+    womens = re.search(r"\(w\)|wom[ae]n|\bw\s*\d|\d\s*w\b", low)
+    us = find(r"\bm(?:en'?s)?\s*" + n, n + r"\s*m\b")                      # "M9/W10.5"
+    if us is None and not womens:
+        us = find(r"\bus\s*(?:men'?s)?\s*" + n, n + r"\s*us\b")
+    uk, eu, cm = find(r"\buk\s*" + n, n + r"\s*uk\b"), find(r"\b(?:eu|eur|fr|it)\s*" + n), find(n + r"\s*cm\b")
+    if us is None and uk is None and eu is None and cm is None and not womens:
+        bare = number(low)
+        if bare is None:
+            return set()
+        if 200 <= bare <= 330:
+            cm = bare / 10                                                 # millimetres
+        elif 34 <= bare <= 50:
+            eu = bare
+        elif 21.5 <= bare <= 32:
+            cm = bare
+        else:
+            us = bare
+    if us is not None:
+        out = [us]
+    elif uk is not None:
+        out = [uk + 0.5, uk + 1]
+    elif eu is not None:
+        # dress shoes run EU - 33; sneakers drift to EU - 34 in larger sizes
+        out = [eu - 33, eu - (33 if eu < 42 else 33.5 if eu < 44 else 34)]
+    elif cm is not None:
+        out = [cm - 18]
+    else:
+        return set()
+    return {f"{round(x * 2) / 2:g}" for x in out if 3 <= x <= 16}
+
+
+def size_tokens(kind, live, every):
+    """Normalised sizes for the in-stock labels `live`; `every` is all labels the item comes in."""
+    if kind == "footwear":
+        return sorted({t for s in live for t in shoe_us(s)}, key=float)
+    scale = [n for n in map(number, every) if n is not None] or [0]
+    out = set()
+    for s in live:
+        if compact(s) in ONE_SIZE:
+            out.add("OS")
+        elif alpha(s):
+            out |= alpha(s)
+        elif number(s) is not None:
+            out |= clothing_size(kind, number(s), scale)
+    return sorted(out, key=lambda t: (LETTERS.index(t) if t in LETTERS else 99, t))
+
+
+# ---------------------------------------------------------------- currency
+
+# Units per US dollar; only used if the rate service and the last build's rates are both missing.
+FALLBACK_RATES = {"USD": 1, "JPY": 160, "GBP": 0.76, "EUR": 0.91, "CAD": 1.43, "AUD": 1.48, "KRW": 1340}
+
+
+def usd_rates(previous):
+    """Units of each currency per US dollar: today's, else the last build's, else the table above."""
+    status, body = get("https://open.er-api.com/v6/latest/USD")
+    try:
+        rates = json.loads(body)["rates"]
+        if rates["USD"] == 1:
+            return rates
+    except Exception:
+        pass
+    return {**FALLBACK_RATES, **(previous.get("rates") or {})}
+
+
+# ---------------------------------------------------------------- main
+
+def main():
+    global DELAY
+    cfg = load_json(os.path.join(ROOT, "stores.json"), None)
+    if not cfg:
+        sys.exit("stores.json missing or invalid")
+    settings = cfg.get("settings", {})
+    min_off = settings.get("min_discount", 20)
+    max_pages = settings.get("max_pages", 20)
+    DELAY = settings.get("delay_seconds", 1.0)
+    stores = {s["host"]: s for s in cfg["stores"]}
+
+    state_path = os.path.join(ROOT, "data", "state.json")
+    out_path = os.path.join(ROOT, "docs", "data.json")
+    state = load_json(state_path, {})
+    previous = load_json(out_path, {"items": []})
+
+    # ---- sort wishlist URLs by store
+    wish_products, wish_colls, wish_pages = {}, {}, {}
+    try:
+        lines = open(os.path.join(ROOT, "wishlist.txt"), encoding="utf-8").read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    for line in lines:
+        url = line.strip()
+        if not url.startswith("http"):
+            continue
+        u = urlparse(url)
+        host = u.netloc
+        # blueowl.us and www.blueowl.us are the same store
+        alt = host[4:] if host.startswith("www.") else "www." + host
+        if host not in stores and alt in stores:
+            host = alt
+        store = stores.setdefault(host, {"host": host, "name": host, "platform": "link", "group": "other"})
+        m_prod = re.search(r"/products/([^/?#]+)", u.path)
+        m_coll = re.search(r"/collections/([^/?#]+)", u.path)
+        if store["platform"] == "shopify" and m_prod:
+            wish_products.setdefault(host, set()).add(unquote(m_prod.group(1)))
+        elif store["platform"] == "shopify" and m_coll:
+            wish_colls.setdefault(host, set()).add(m_coll.group(1))
+        else:
+            clean = url.split("#")[0]
+            wish_pages.setdefault(host, [])
+            if clean not in wish_pages[host]:
+                wish_pages[host].append(clean)
+
+    items, status = {}, []
+
+    def add(item, tag, coll=None):
+        if not item:
+            return
+        cur = items.setdefault(item["id"], item)
+        if tag not in cur["tags"]:
+            cur["tags"].append(tag)
+        if coll:
+            cur["coll"] = coll
+
+    for host, store in stores.items():
+        name = store.get("name", host)
+        errors, before = [], len(items)
+        colls = set(store.get("collections", [])) | wish_colls.get(host, set())
+        wanted = set(wish_products.get(host, set()))
+        print(f"{host} ...", flush=True)
+
+        if store["platform"] == "shopify":
+            if store.get("browse"):
+                try:
+                    for p in shopify_feed(host, "", max_pages):
+                        it = shopify_item(host, p)
+                        if not it:
+                            continue
+                        if p.get("handle") in wanted:
+                            add(it, "wish")
+                            wanted.discard(p.get("handle"))
+                        if it["off"] >= min_off and it["avail"]:
+                            add(it, "sale")
+                except Exception as e:
+                    errors.append(f"catalog: {e}")
+            for c in sorted(colls):
+                try:
+                    for p in shopify_feed(host, f"/collections/{c}", max_pages):
+                        it = shopify_item(host, p)
+                        add(it, "coll", c)
+                        if it and it["off"] >= min_off and it["avail"]:
+                            add(it, "sale")
+                except Exception as e:
+                    errors.append(f"collection {c}: {e}")
+            for handle in sorted(wanted):
+                url = f"https://{host}/products/{handle}"
+                try:
+                    add(shopify_single(host, handle), "wish")
+                except Gone:  # taken down by the store: not our error
+                    add(link_item(host, url, "No longer listed"), "wish")
+                except Exception as e:
+                    errors.append(f"{handle}: {e}")
+                    add(link_item(host, url, "could not read price"), "wish")
+
+        for url in wish_pages.get(host, []):
+            if store["platform"] == "page":
+                try:
+                    add(page_item(host, url), "wish")
+                    continue
+                except Gone:
+                    add(link_item(host, url, "No longer listed"), "wish")
+                    continue
+                except Exception as e:
+                    errors.append(f"{url[-40:]}: {e}")
+            add(link_item(host, url), "wish")
+
+        # If a store failed completely, keep what we showed last time.
+        got = len(items) - before
+        if errors and got == 0:
+            for old in previous.get("items", []):
+                if old.get("store") == host and old["id"] not in items:
+                    old["stale"] = True
+                    items[old["id"]] = old
+        if store["platform"] != "link" or errors:
+            status.append({"host": host, "name": name, "ok": not errors,
+                           "count": len(items) - before, "errors": errors[:5]})
+
+    # ---- decorate: store info, category, sizes, US dollar price, price history
+    prices = state.get("prices", {})
+    rates = usd_rates(previous)
+    for it in items.values():
+        s = stores.get(it["store"], {})
+        it["store_name"] = s.get("name", it["store"])
+        ptype = it.pop("ptype", "")
+        if not it.get("stale"):  # stale items keep the category they had
+            group, kind = s.get("group", "other"), None
+            # Clothing stores, and others marked "mixed", get sorted per item.
+            # Pure kitchen / stationery shops don't: "Pen Cap" is not a hat.
+            if group == "clothing" or s.get("mixed"):
+                group, _, kind = (categorize(ptype, it["title"]) or group).partition("/")
+                if group == "clothing":
+                    kind = kind or s.get("kind", "other")
+            it["group"], it["kind"] = group, kind or None
+        it["cur"] = it.get("cur") or s.get("currency", "USD")
+        if not it.get("g"):
+            it.pop("g", None)
+        every =it.pop("sizes_all", None) or it["sizes"]
+        if not it.get("stale"):
+            sz = size_tokens(it["kind"], it["sizes"], every) if it["kind"] in SIZED else []
+            it.pop("sz", None)
+            if sz:
+                it["sz"] = sz
+            if it.get("price") is not None and rates.get(it["cur"]):
+                it["usd"] = round(it["price"] / rates[it["cur"]], 2)
+        if it.get("stale"):
+            continue
+        # Price history: one record per item, a new point only when the price changes.
+        rec = prices.setdefault(it["id"], {"first": TODAY, "h": []})
+        rec["last"], h, price = TODAY, rec["h"], it.get("price")
+        if price is not None and (not h or h[-1][1] != price):
+            if h and h[-1][0] == TODAY:
+                h.pop()                                  # one point per day: the latest wins
+            if not h or h[-1][1] != price:
+                h.append([TODAY, price])
+            del h[:-30]
+        it["first_seen"] = rec["first"]
+        it.pop("hist", None)
+        if len(h) > 1:
+            it["hist"] = h[-12:]
+            high = max(p for _, p in h)
+            if not it["off"] and high > price:
+                it["was"], it["tracked_drop"] = high, True
+                it["off"] = round((high - price) / high * 100)
+
+    # Forget items that have not been seen for 90 days.
+    cutoff = (datetime.date.today() - datetime.timedelta(days=90)).isoformat()
+    lines = [f"{json.dumps(k)}:{json.dumps(v, separators=(',', ':'))}"
+             for k, v in sorted(prices.items()) if v.get("last", TODAY) >= cutoff]
+    os.makedirs(os.path.dirname(state_path), exist_ok=True)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(state_path, "w", encoding="utf-8") as f:   # one item per line keeps git diffs small
+        f.write('{"prices":{\n' + ",\n".join(lines) + "\n}}\n")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="minutes"),
+            "min_discount": min_off,
+            "rates": {c: rates[c] for c in sorted({i["cur"] for i in items.values()}) if c in rates},
+            "tiers": {h: s["tier"] for h, s in stores.items() if s.get("tier")},
+            "status": status,
+            "items": sorted(items.values(), key=lambda i: (-i["off"], i["store"], i["title"])),
+        }, f, ensure_ascii=False, separators=(",", ":"))
+
+    bad = [s["host"] for s in status if not s["ok"]]
+    print(f"\n{len(items)} items written. Stores with errors: {', '.join(bad) or 'none'}")
+
+
+if __name__ == "__main__":
+    main()

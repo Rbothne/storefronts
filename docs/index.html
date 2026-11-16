@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Listings</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --card: #ffffff; --ink: #1b1b1a; --muted: #6f6e69; --line: #e2e0da;
+    --accent: #1f4d3a; --sale: #a8321f; --chip: #eceae4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141413; --card: #1e1e1c; --ink: #ecebe6; --muted: #9a988f; --line: #30302c;
+            --accent: #8fc7ab; --sale: #f08a73; --chip: #2a2a27; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line);
+           padding: 10px 14px 8px; }
+  @media (max-width: 700px) { header { position: static; } }   /* the filters are too tall to pin on a phone */
+  button { font: inherit; color: var(--ink); cursor: pointer; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tabs button, .pill { border: 1px solid var(--line); background: var(--card); padding: 7px 12px; border-radius: 999px; }
+  .tabs button[aria-pressed="true"], .chips button[aria-pressed="true"] {
+    background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+  .tabs .n { opacity: .7; margin-left: 4px; font-variant-numeric: tabular-nums; }
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  input[type=search], select, textarea {
+    font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 8px; min-width: 0; }
+  .filters input[type=search] { flex: 1 1 140px; }
+  .filters label { display: flex; align-items: center; gap: 4px; color: var(--muted); white-space: nowrap; }
+  .filters .pill { padding: 5px 12px; }
+  main { padding: 12px 14px 40px; }
+  #count { color: var(--muted); margin: 0 0 10px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+  @media (min-width: 700px) { .grid { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; position: relative; }
+  .card:hover { border-color: var(--accent); }
+  .card > a { display: flex; flex-direction: column; color: inherit; text-decoration: none; height: 100%; }
+  .pic { aspect-ratio: 4 / 5; background: var(--chip); display: flex; align-items: center; justify-content: center;
+         color: var(--muted); font-size: 12px; text-align: center; padding: 8px; }
+  .pic img { object-fit: cover; display: block; margin: -8px; width: calc(100% + 16px); height: calc(100% + 16px); max-width: none; }
+  .off { position: absolute; top: 8px; left: 8px; background: var(--sale); color: #fff; font-weight: 700;
+         padding: 2px 7px; border-radius: 6px; font-size: 12px; }
+  .new { position: absolute; top: 8px; right: 46px; background: var(--accent); color: var(--bg); font-weight: 600;
+         padding: 2px 7px; border-radius: 6px; font-size: 11px; }
+  .star { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; border-radius: 50%; padding: 0;
+          border: 1px solid var(--line); background: var(--card); font-size: 17px; line-height: 1; }
+  .star[aria-pressed="true"] { color: var(--sale); }
+  .star:disabled { cursor: default; opacity: .75; }
+  .mute { top: 44px; font-size: 13px; color: var(--muted); opacity: 0; transition: opacity .15s; }
+  .card:hover .mute, .mute:focus-visible { opacity: 1; }
+  @media (hover: none) { .mute { opacity: .8; } }
+  .hist { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .hist path { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linejoin: round; }
+  .hist circle { fill: var(--accent); }
+  #toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 9; display: flex; gap: 12px;
+           align-items: center; background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 10px; }
+  #toast[hidden] { display: none; }
+  #toast button { background: none; border: 0; color: inherit; font-weight: 700; text-decoration: underline; padding: 0; }
+  .body { padding: 9px 10px 10px; display: flex; flex-direction: column; gap: 3px; }
+  .store { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .title { font-weight: 600; overflow-wrap: anywhere; }
+  .price { font-variant-numeric: tabular-nums; }
+  .price s, .price .usd { color: var(--muted); margin-left: 6px; }
+  .price .now.sale { color: var(--sale); font-weight: 700; }
+  .meta { color: var(--muted); font-size: 12px; }
+  #more { display: block; margin: 18px auto 0; padding: 9px 18px; border-radius: 8px;
+          border: 1px solid var(--line); background: var(--card); }
+  #more[hidden] { display: none; }  /* display:block above would otherwise override the hidden attribute */
+  footer { color: var(--muted); font-size: 12px; padding: 0 14px 30px; }
+  footer details { margin-top: 6px; }
+  footer li.bad { color: var(--sale); }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; grid-column: 1 / -1; }
+
+  dialog { width: min(680px, 94vw); max-height: 90vh; border: 1px solid var(--line); border-radius: 12px;
+           background: var(--bg); color: var(--ink); padding: 16px 18px; }
+  dialog::backdrop { background: rgba(0, 0, 0, .45); }
+  dialog h2 { font-size: 15px; margin: 18px 0 4px; }
+  dialog h2:first-of-type { margin-top: 4px; }
+  dialog p { color: var(--muted); margin: 0 0 8px; }
+  dialog .row { display: flex; gap: 8px; align-items: baseline; margin: 6px 0; }
+  dialog .row > span:first-child { flex: 0 0 120px; color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chips button { border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 3px 8px;
+                  min-width: 34px; font-variant-numeric: tabular-nums; }
+  #storelist { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+  #storelist div { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 8px;
+                   border-bottom: 1px solid var(--line); }
+  #storelist small { color: var(--muted); }
+  dialog textarea { width: 100%; height: 70px; font-size: 12px; }
+  dialog .bar { display: flex; gap: 8px; justify-content: space-between; margin-top: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="tabs" id="tabs"></div>
+  <div class="filters">
+    <input type="search" id="q" placeholder="Search title, brand, store" aria-label="Search">
+    <select id="group" aria-label="Category"></select>
+    <select id="store" aria-label="Store"></select>
+    <select id="tier" aria-label="Store level">
+      <option value="">All but "not interested"</option><option value="1">Priority 1 stores</option>
+      <option value="1,2">Priority 1 and 2</option><option value="2">Priority 2 stores</option>
+      <option value="gift">Gift stores</option><option value="none">Unrated stores</option>
+      <option value="no">Hidden: not interested</option>
+    </select>
+    <select id="gender" aria-label="Men's or women's">
+      <option value="">Men's and women's</option><option value="m">Men's and unisex</option>
+      <option value="w">Women's and unisex</option>
+    </select>
+    <select id="minoff" aria-label="Minimum discount">
+      <option value="0">Any discount</option><option value="20">20%+ off</option>
+      <option value="30">30%+ off</option><option value="40">40%+ off</option>
+      <option value="50">50%+ off</option><option value="60">60%+ off</option>
+    </select>
+    <select id="sort" aria-label="Sort">
+      <option value="best">Best deals</option><option value="off">Biggest discount</option><option value="new">Newest</option>
+      <option value="lo">Price: low to high</option><option value="hi">Price: high to low</option>
+      <option value="store">Store</option>
+    </select>
+    <label><input type="checkbox" id="stock"> In stock</label>
+    <label><input type="checkbox" id="mysizes"> My sizes</label>
+    <button class="pill" id="opensettings">Sizes &amp; stores</button>
+  </div>
+</header>
+<main>
+  <p id="count"></p>
+  <div class="grid" id="grid"></div>
+  <button id="more" hidden>Show more</button>
+</main>
+<footer id="foot"></footer>
+<div id="toast" hidden><span></span><button>Undo</button></div>
+
+<dialog id="settings">
+  <h2>My sizes</h2>
+  <p>Pick every size you would buy, then tick “My sizes” to hide items not in stock in them.
+     Other countries' sizes are converted; items with no readable size stay visible.</p>
+  <div class="row"><span>Tops &amp; outerwear</span><div class="chips" id="sz-tops"></div></div>
+  <div class="row"><span>Bottoms</span><div class="chips" id="sz-bottoms"></div></div>
+  <div class="row"><span>Shoes (US men's)</span><div class="chips" id="sz-shoes"></div></div>
+
+  <h2>Stores</h2>
+  <p>Rate stores to filter by level. “Not interested” hides a store everywhere except your followed items and the “Hidden: not interested” view.</p>
+  <div id="storelist"></div>
+
+  <h2>Hidden brands</h2>
+  <p>Use ✕ on a card to hide everything from its brand. Click a brand here to bring it back.</p>
+  <div class="chips" id="mutedlist"></div>
+
+  <h2>Followed items</h2>
+  <p>Stars are saved in this browser and only tracked while the item is on sale. To track one permanently
+     and on every device, add its link to <code>wishlist.txt</code>.</p>
+  <button class="pill" id="copylinks">Copy links of starred items</button>
+
+  <h2>Backup</h2>
+  <p>Everything on this panel lives in this browser. Copy this text to move it to another device, or paste and load.</p>
+  <textarea id="backup" spellcheck="false" aria-label="Settings backup"></textarea>
+  <div class="bar"><button class="pill" id="loadbackup">Load pasted settings</button>
+    <button class="pill" id="closesettings">Done</button></div>
+</dialog>
+
+<script>
+const TABS = [["wish", "Followed"], ["brands", "Brands"], ["sale", "On sale"], ["coll", "Collections"], ["all", "Everything"]];
+const TIERS = [["", "Unrated"], ["1", "Priority 1"], ["2", "Priority 2"], ["gift", "Gifts"], ["no", "Not interested"]];
+const LETTERS = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"];
+// Fallback grouping between waist inches and letter sizes, used when you picked only one of the two.
+const WAIST = { XS: [26, 27, 28], S: [29, 30], M: [31, 32, 33], L: [34, 35, 36], XL: [37, 38, 39, 40], XXL: [41, 42, 43] };
+const PAGE = 120, KEY = "listings-prefs";
+let DATA = { items: [], status: [], tiers: {} }, IDS = new Set(), tab = "wish", shown = PAGE;
+// Personal settings, kept in this browser: starred items, store levels, hidden brands, sizes.
+let prefs = { follows: {}, tiers: {}, muted: {}, gender: "", sizes: { tops: [], bottoms: [], shoes: [] } };
+const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+function loadPrefs(text) {
+  const p = JSON.parse(text);
+  prefs = { follows: p.follows || {}, tiers: p.tiers || {}, muted: p.muted || {}, gender: p.gender || "",
+            sizes: { tops: [], bottoms: [], shoes: [], ...(p.sizes || {}) } };
+}
+function savePrefs() { try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch (e) {} }
+try { loadPrefs(localStorage.getItem(KEY) || "{}"); } catch (e) {}
+
+function money(v, cur) {
+  if (v == null) return "";
+  try { return new Intl.NumberFormat("en-US", { style: "currency", currency: cur || "USD",
+          maximumFractionDigits: (cur === "JPY" || v % 1 === 0) ? 0 : 2 }).format(v); }
+  catch (e) { return v + " " + (cur || ""); }
+}
+function thumb(src) {
+  if (!src) return "";
+  if (src.includes("cdn.shopify.com") || src.includes("/cdn/shop/"))
+    return src + (src.includes("?") ? "&" : "?") + "width=480";
+  return src;
+}
+function daysSince(d) { return Math.floor((Date.now() - new Date(d + "T00:00:00Z")) / 864e5); }
+
+// ---- follows, brands, store levels, sizes
+const inFile = i => i.tags.includes("wish");                 // listed in wishlist.txt
+const isFollowed = i => inFile(i) || i.id in prefs.follows;
+const brandKey = b => (b || "").toLowerCase().replace(/\b(wo)?mens\b/g, "").replace(/[^a-z0-9]/g, "");
+const tierOf = host => host in prefs.tiers ? prefs.tiers[host] : (DATA.tiers || {})[host] || "";
+// Everything in the latest data, plus starred items that have since dropped out of it.
+const pool = () => [...DATA.items, ...Object.values(prefs.follows).filter(f => !IDS.has(f.id)).map(f => ({ ...f, tags: [], gone: true }))];
+function followedBrands(items) {
+  const m = new Map();
+  for (const i of items) {
+    const b = i.brand || i.store_name;                       // brand-run stores often leave the brand blank
+    if (isFollowed(i) && brandKey(b)) m.set(brandKey(b), b);
+  }
+  return m;
+}
+const ruledOut = i => tierOf(i.store) === "no" || brandKey(i.brand) in prefs.muted;   // store or brand you hid
+function storeShown(i) {
+  const want = $("tier").value;
+  if (want === "no") return ruledOut(i);                     // the one place hidden things are shown
+  return !ruledOut(i) && (!want || want.split(",").includes(tierOf(i.store) || "none"));
+}
+// Best-deals score: the discount, plus signals that it is a deal for you. Tune the weights here.
+function score(i, brands) {
+  let s = (i.off || 0) >= 90 ? 30 : i.off || 0;              // 90%+ off is almost always a listing error
+  if (brands.has(brandKey(i.brand))) s += 25;                // a brand you follow
+  s += { 1: 15, 2: 7 }[tierOf(i.store)] || 0;                // a store you rated
+  if (i.sz && !i.sz.includes("OS") && wantedSizes(i.kind).length && sizeOK(i)) s += 10;   // in stock in your size
+  if (i.hist && i.price <= Math.min(...i.hist.map(h => h[1]))) s += 10;                 // lowest price tracked
+  if (i.first_seen && daysSince(i.first_seen) <= 3) s += 5;  // just appeared
+  if ((i.usd ?? i.price ?? 99) < 15) s -= 15;                // stickers and socks
+  return s;
+}
+function inTab(i, key, brands) {
+  if (key === "wish") return isFollowed(i);                  // followed items ignore store levels
+  if (i.gone || !storeShown(i)) return false;
+  if (key === "brands") return brands.has(brandKey(i.brand)) && !isFollowed(i);
+  return key === "all" || i.tags.includes(key);
+}
+function wantedSizes(kind) {
+  const s = prefs.sizes;
+  if (kind === "footwear") return s.shoes;
+  if (kind !== "bottoms") return s.tops;
+  const letters = s.bottoms.filter(x => isNaN(x)), waists = s.bottoms.filter(x => !isNaN(x));
+  if (!letters.length) return [...waists, ...LETTERS.filter(k => (WAIST[k] || []).some(w => waists.includes(String(w))))];
+  if (!waists.length) return [...letters, ...letters.flatMap(k => (WAIST[k] || []).map(String))];
+  return s.bottoms;
+}
+function sizeOK(i) {
+  if (!i.sz || i.sz.includes("OS")) return true;             // unknown or one-size: keep
+  const want = wantedSizes(i.kind);
+  return !want.length || i.sz.some(t => want.includes(t));
+}
+
+function filtered(items, brands) {
+  const q = $("q").value.trim().toLowerCase(), g = $("group").value, s = $("store").value;
+  const min = +$("minoff").value, stock = $("stock").checked, mine = $("mysizes").checked, gen = $("gender").value;
+  const list = items.filter(i =>
+    inTab(i, tab, brands) &&
+    (!g || i.group === g || i.group + "/" + i.kind === g) && (!s || i.store === s) &&
+    (i.off || 0) >= min && (!stock || i.avail === true) && (!mine || sizeOK(i)) &&
+    (!gen || !i.g || i.g === gen) &&                         // unlabelled items count as unisex
+    (!q || (i.title + " " + (i.brand || "") + " " + i.store_name).toLowerCase().includes(q)));
+  const usd = i => i.usd ?? i.price;                         // compare prices in one currency
+  const sc = new Map(list.map(i => [i, score(i, brands)]));
+  const by = {
+    best: (a, b) => sc.get(b) - sc.get(a) || (b.off || 0) - (a.off || 0),
+    off: (a, b) => (b.off || 0) - (a.off || 0),
+    new: (a, b) => (b.first_seen || "").localeCompare(a.first_seen || ""),
+    lo: (a, b) => (usd(a) ?? 1e12) - (usd(b) ?? 1e12),
+    hi: (a, b) => (usd(b) ?? -1) - (usd(a) ?? -1),
+    store: (a, b) => a.store_name.localeCompare(b.store_name) || a.title.localeCompare(b.title),
+  }[$("sort").value];
+  return list.sort(by);
+}
+
+function star(i) {
+  const b = el("button", "star"), set = () => {
+    b.textContent = isFollowed(i) ? "★" : "☆"; b.setAttribute("aria-pressed", isFollowed(i));
+    b.title = inFile(i) ? "Followed in wishlist.txt" : isFollowed(i) ? "Stop following" : "Follow this item";
+  };
+  b.disabled = inFile(i); b.setAttribute("aria-label", "Follow"); set();
+  b.onclick = () => {
+    if (i.id in prefs.follows) delete prefs.follows[i.id];
+    else { const { tags, gone, ...copy } = i; prefs.follows[i.id] = copy; }
+    savePrefs();
+    if (tab === "wish" || tab === "brands") render(); else { set(); counts(pool()); }
+  };
+  return b;
+}
+
+function toast(text, undo) {
+  const t = $("toast"); t.firstChild.textContent = text; t.hidden = false;
+  t.lastChild.onclick = () => { undo(); t.hidden = true; };
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.hidden = true; }, 8000);
+}
+function muteButton(i) {
+  const k = brandKey(i.brand), b = el("button", "star mute", k in prefs.muted ? "↩" : "✕");
+  const flip = () => { k in prefs.muted ? delete prefs.muted[k] : prefs.muted[k] = i.brand; savePrefs(); render(); };
+  b.title = (k in prefs.muted ? "Show " : "Not interested in ") + i.brand; b.setAttribute("aria-label", b.title);
+  b.onclick = () => { const hid = !(k in prefs.muted); flip(); if (hid) toast("Hid everything from " + i.brand + ".", flip); };
+  return b;
+}
+// Price history sparkline: a step line (a price holds until it changes), scaled by date, today's price marked.
+function spark(i) {
+  const NS = "http://www.w3.org/2000/svg", W = 64, H = 18, h = i.hist, ps = h.map(p => p[1]);
+  const lo = Math.min(...ps), hi = Math.max(...ps), t = d => Date.parse(d + "T00:00:00Z");
+  const t0 = t(h[0][0]), t1 = Math.max(Date.now(), t(h[h.length - 1][0]) + 864e5);
+  const x = d => (3 + (t(d) - t0) / (t1 - t0) * (W - 7)).toFixed(1), y = p => (3 + (H - 6) * (hi - p) / (hi - lo)).toFixed(1);
+  let d = "M" + x(h[0][0]) + "," + y(ps[0]);
+  for (let n = 1; n < h.length; n++) d += "H" + x(h[n][0]) + "V" + y(ps[n]);
+  d += "H" + (W - 4);
+  const svg = document.createElementNS(NS, "svg"), path = document.createElementNS(NS, "path"), dot = document.createElementNS(NS, "circle");
+  const title = document.createElementNS(NS, "title");
+  title.textContent = "Price history: " + h.map(([day, p]) => day.slice(5) + " " + money(p, i.cur)).join(" → ");
+  svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", title.textContent);
+  path.setAttribute("d", d); dot.setAttribute("cx", W - 4); dot.setAttribute("cy", y(i.price)); dot.setAttribute("r", 2.5);
+  svg.append(title, path, dot);
+  const row = el("div", "hist"); row.append(svg);
+  row.append(el("span", null, i.price <= lo ? "Lowest price tracked" : "Low was " + money(lo, i.cur)));
+  return row;
+}
+
+function card(i) {
+  const c = el("div", "card"), a = el("a"); a.href = i.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+  const pic = el("div", "pic");
+  if (i.img) {
+    const img = el("img"); img.loading = "lazy"; img.alt = ""; img.referrerPolicy = "no-referrer"; img.src = thumb(i.img);
+    img.onerror = () => { img.remove(); pic.textContent = "No image"; };
+    pic.append(img);
+  } else pic.textContent = i.link_only ? "Open listing" : "No image";
+  a.append(pic);
+  if (i.off) a.append(el("span", "off", "-" + i.off + "%"));
+  if (i.first_seen && daysSince(i.first_seen) <= 3 && tab !== "wish") a.append(el("span", "new", "New"));
+  const b = el("div", "body");
+  b.append(el("div", "store", i.store_name + (i.brand && i.brand !== i.store_name ? " · " + i.brand : "")));
+  b.append(el("div", "title", i.title));
+  if (i.price != null) {
+    const p = el("div", "price");
+    p.append(el("span", "now" + (i.off ? " sale" : ""), money(i.price, i.cur)));
+    if (i.was) p.append(el("s", null, money(i.was, i.cur)));
+    if (i.cur !== "USD" && i.usd != null) p.append(el("span", "usd", "≈ " + money(Math.round(i.usd), "USD")));
+    b.append(p);
+  }
+  if (i.hist && i.price != null) b.append(spark(i));
+  const notes = [];
+  if (i.gone) notes.push("No longer in the sale data; add its link to wishlist.txt to keep tracking it");
+  if (i.tracked_drop) notes.push("Down from highest price tracked");
+  if (i.avail === false) notes.push("Sold out");
+  if (i.stale) notes.push("Last update failed; showing older data");
+  if (i.link_only) notes.push(i.note || "Price not tracked for this store");
+  if (i.coll && tab === "coll") notes.push("Collection: " + i.coll);
+  if (i.sizes && i.sizes.length) notes.push(i.sizes.join(", "));
+  if (notes.length) b.append(el("div", "meta", notes.join(" · ")));
+  a.append(b); c.append(a, star(i));
+  if (brandKey(i.brand) && !isFollowed(i)) c.append(muteButton(i));
+  return c;
+}
+
+function counts(items, brands = followedBrands(items)) {
+  for (const btn of $("tabs").children) {
+    btn.lastChild.textContent = items.filter(i => inTab(i, btn.dataset.tab, brands)).length;
+    btn.setAttribute("aria-pressed", btn.dataset.tab === tab);
+  }
+}
+function render() {
+  const items = pool(), brands = followedBrands(items), list = filtered(items, brands), grid = $("grid");
+  grid.replaceChildren(...list.slice(0, shown).map(card));
+  if (!list.length) grid.replaceChildren(el("div", "empty", tab === "brands" && !brands.size
+    ? "Star an item (☆) to see everything on sale from its brand."
+    : tab === "wish" && !items.some(isFollowed) ? "Nothing followed yet. Star an item (☆) or add links to wishlist.txt."
+    : "Nothing matches these filters."));
+  let text = list.length + (list.length === 1 ? " item" : " items");
+  if (tab === "brands" && list.length)                       // name only the brands that have something to show
+    text += " from brands you follow: " + [...new Set(list.map(i => brands.get(brandKey(i.brand))))].sort().join(", ");
+  $("count").textContent = text;
+  $("more").hidden = list.length <= shown;
+  $("more").textContent = "Show more (" + (list.length - shown) + " left)";
+  counts(items, brands);
+}
+function reset() { shown = PAGE; render(); }
+
+// ---- settings panel
+function chips(box, values, chosen) {
+  box.replaceChildren(...values.map(v => {
+    const b = el("button", null, v); b.setAttribute("aria-pressed", chosen.includes(v));
+    b.onclick = () => {
+      chosen.includes(v) ? chosen.splice(chosen.indexOf(v), 1) : chosen.push(v);
+      b.setAttribute("aria-pressed", chosen.includes(v)); savePrefs(); reset();
+    };
+    return b;
+  }));
+}
+function drawSettings() {
+  const range = (a, b, step = 1) => Array.from({ length: (b - a) / step + 1 }, (_, n) => String(a + n * step));
+  chips($("sz-tops"), LETTERS, prefs.sizes.tops);
+  chips($("sz-bottoms"), [...LETTERS.slice(1, 7), ...range(26, 42)], prefs.sizes.bottoms);
+  chips($("sz-shoes"), range(6, 14, 0.5), prefs.sizes.shoes);
+  const n = {}, names = {};
+  for (const i of DATA.items) { n[i.store] = (n[i.store] || 0) + 1; names[i.store] = i.store_name; }
+  for (const s of DATA.status) { n[s.host] ??= 0; names[s.host] = s.name; }
+  $("storelist").replaceChildren(...Object.keys(n).sort((a, b) => n[b] - n[a] || names[a].localeCompare(names[b])).map(h => {
+    const row = el("div"), label = el("span", null, names[h] + " "), sel = el("select");
+    label.append(el("small", null, n[h] + " items"));
+    sel.append(...TIERS.map(([v, t]) => new Option(t, v))); sel.value = tierOf(h); sel.setAttribute("aria-label", "Level for " + names[h]);
+    sel.onchange = () => { prefs.tiers[h] = sel.value; savePrefs(); reset(); };
+    row.append(label, sel);
+    return row;
+  }));
+  const muted = Object.entries(prefs.muted).sort((a, b) => a[1].localeCompare(b[1]));
+  $("mutedlist").replaceChildren(...muted.map(([k, name]) => {
+    const b = el("button", null, name + " ✕"); b.title = "Show " + name + " again";
+    b.onclick = () => { delete prefs.muted[k]; savePrefs(); drawSettings(); reset(); };
+    return b;
+  }));
+  if (!muted.length) $("mutedlist").append(el("span", "meta", "None hidden."));
+  $("backup").value = JSON.stringify(prefs);
+}
+
+function setup() {
+  IDS = new Set(DATA.items.map(i => i.id));
+  for (const [key, label] of TABS) {
+    const btn = el("button", null, label); btn.dataset.tab = key; btn.append(el("span", "n", ""));
+    btn.onclick = () => { tab = key; reset(); };
+    $("tabs").append(btn);
+  }
+  // Category menu: each group, with clothing split into its kinds (value "clothing/tops").
+  const LABELS = { home: "Home & stationery", skate: "Skateboarding", other: "Other" };
+  const label = k => LABELS[k] || k[0].toUpperCase() + k.slice(1);
+  const opts = [new Option("All categories", "")];
+  for (const g of [...new Set(DATA.items.map(i => i.group))].sort()) {
+    const kinds = [...new Set(DATA.items.filter(i => i.group === g && i.kind).map(i => i.kind))]
+      .sort((a, b) => (a === "other") - (b === "other") || a.localeCompare(b));
+    opts.push(new Option(label(g) + (kinds.length ? " (all)" : ""), g));
+    for (const k of kinds) opts.push(new Option("   " + (k === "other" ? "Other " + g : label(k)), g + "/" + k));
+  }
+  $("group").append(...opts);
+  const stores = [...new Map(DATA.items.map(i => [i.store, i.store_name])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  $("store").append(new Option("All stores", ""), ...stores.map(([h, n]) => new Option(n, h)));
+  for (const id of ["q", "group", "store", "tier", "minoff", "sort", "stock", "mysizes"]) $(id).addEventListener("input", reset);
+  $("gender").value = prefs.gender;                           // remembered between visits
+  $("gender").addEventListener("input", () => { prefs.gender = $("gender").value; savePrefs(); reset(); });
+  $("more").onclick = () => { shown += PAGE; render(); };
+
+  $("opensettings").onclick = () => { drawSettings(); $("settings").showModal(); };
+  $("closesettings").onclick = () => $("settings").close();
+  $("copylinks").onclick = () => {
+    const links = Object.values(prefs.follows).map(f => f.url).join("\n");
+    navigator.clipboard.writeText(links).then(() => { $("copylinks").textContent = "Copied " + Object.keys(prefs.follows).length + " links"; });
+  };
+  $("loadbackup").onclick = () => {
+    try { loadPrefs($("backup").value); savePrefs(); $("gender").value = prefs.gender; drawSettings(); reset(); $("loadbackup").textContent = "Loaded"; }
+    catch (e) { $("loadbackup").textContent = "That text is not a valid backup"; }
+  };
+
+  const foot = $("foot"), bad = DATA.status.filter(s => !s.ok);
+  const when = DATA.generated ? new Date(DATA.generated).toLocaleString() : "unknown";
+  foot.append(el("div", null, "Updated " + when + ". Sale tab shows items at least " + (DATA.min_discount || 0) +
+    "% off the store's listed original price. Prices are in each store's own currency; ≈ values are US dollars at today's rate."));
+  const d = el("details"); d.append(el("summary", null, "Store status: " + (DATA.status.length - bad.length) + " ok, " + bad.length + " with errors"));
+  const ul = el("ul");
+  for (const s of [...bad, ...DATA.status.filter(s => s.ok)])
+    ul.append(el("li", s.ok ? null : "bad", s.name + ": " + s.count + " items" + (s.ok ? "" : " — " + s.errors.join("; "))));
+  d.append(ul); foot.append(d);
+  if (!pool().some(isFollowed)) tab = "sale";                // nothing followed yet: open on the sale tab
+  render();
+}
+
+fetch("data.json", { cache: "no-store" })
+  .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+  .then(d => { DATA = d; setup(); })
+  .catch(() => { $("grid").replaceChildren(el("div", "empty",
+    "No data yet. Run the “Update listings” workflow once from the Actions tab.")); });
+</script>
+</body>
+</html>
