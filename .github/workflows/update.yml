@@ -29,5 +29,7 @@ jobs:
           git add docs data
           git diff --cached --quiet || git commit -m "Update listings"
           # The build takes a while; pick up anything pushed meanwhile so the push is not rejected.
-          git pull --rebase
+          # If data was pushed meanwhile too (a build run by hand), this run's fresh data wins
+          # (during a rebase, "theirs" is the commit being replayed: ours).
+          git pull --rebase -X theirs
           git push
