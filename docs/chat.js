@@ -45,7 +45,7 @@ const TOOLS = [
       type: "object",
       properties: {
         query: { type: "string", description: "Words that must all appear in the item's title, brand, store or category, for example \"needles track pant\". Leave out to browse by the other filters." },
-        category: { type: "string", description: "A site category: clothing, clothing/tops, clothing/bottoms, clothing/outerwear, clothing/footwear, clothing/accessories, coffee, tea, home, music, skate, sports or gear." },
+        category: { type: "string", description: "A site category: clothing, clothing/tops, clothing/bottoms, clothing/outerwear, clothing/dresses, clothing/footwear, clothing/accessories, coffee, tea, home, music, skate, sports or gear." },
         store: { type: "string", description: "Part of a store name, for example \"today clothing\"." },
         brand: { type: "string", description: "Part of a brand name, for example \"auralee\"." },
         max_price_usd: { type: "number", description: "Highest price in US dollars." },

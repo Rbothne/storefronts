@@ -318,13 +318,17 @@ RULES = [(re.compile(r"\b(%s)\b" % rx, re.I), cat) for rx, cat in [
      r"|cappell[oi]|sciarp[ae]|calz(e|ini)|guanti", "clothing/accessories"),
     (r"shoes?|sneakers?|boots?|sandals?|loafers?|footwear|slippers?|mules?|clogs?|(low|mid|high)[- ]tops?"
      r"|scarp[ae]|stival(i|etti)|sandali|mocassini|d[eé]collet[eé]s?|pumps|ballerin[ae]|espadrilles?", "clothing/footwear"),
-    (r"pants?|sweatpants?|trackpants?|\w*shorts|jeans?|trousers?|tights|leggings|skirts?|bottoms?|full-length"
+    (r"pants?|sweatpants?|trackpants?|\w*shorts|jeans?|trousers?|tights|leggings?|joggers?|skirts?|bottoms?|full-length"
      r"|pantalon[ei]|gonn[ae]|bermuda", "clothing/bottoms"),
     (r"jackets?|jkt|coats?|blazers?|bombers?|outerwear|outer|parkas?|blousons?|vests?|anoraks?|windbreakers?"
      r"|puffers?|down-insulated|shell|giacc(a|he)|giubb(ino|ini|otto|otti)|cappott[oi]|piumin[oi]|gilet|trench|ponchos?",
      "clothing/outerwear"),
+    # before tops, so a "sweater dress" is a dress; "dress shirt", "dress pants" and the like are not
+    (r"dress(es)?(?![- ](shirts?|pants?|shoes?|socks?|trousers?|boots?))|jumpsuits?|rompers?|playsuits?|unitards?|onesies?"
+     r"|abit[oi]|vestit[oi]", "clothing/dresses"),
     (r"\w*shirts?|shirting|tees?|(?<!['’])t|polos?|hood(s|y|ie|ies)?|hooded|sweats?|sweaters?|knit(s|wear)?|cardigans?"
-     r"|crew ?necks?|pullovers?|long sleeve|button[- ]downs?|thermals?|tops?|tracktops?|jersey|tank|henley|rugby"
+     r"|crew ?necks?|pullovers?|long ?sleeves?|button[- ]downs?|thermals?|tops?|tracktops?|jersey|tanks?|henley|rugby"
+     r"|crops?|(sports )?bras?(?! bags?)|bralettes?|singlets?|(half|quarter|1/4|1/2)[- ]zips?"
      r"|fleece|magli(a|e|one|oni|eria)|camici[ae]|felp[ae]|girocollo|blouses?|bodysuits?", "clothing/tops"),
     (r"bags?|totes?|backpacks?|pouch(es)?|wallets?|belts?|ties?|sunglasses|eyewear|jewel(le)?ry|necklaces?"
      r"|bracelets?|rings?|watch(es)?|keychains?|bandanas?|leather goods|clutch(es)?|card ?holders?|earrings?"
@@ -352,12 +356,12 @@ def categorize(*texts):
 
 # Stores write the same size many ways ("LG", "Large", "50 (Large)", "3").
 # size_tokens() turns the in-stock sizes of an item into comparable tokens:
-#   tops / outerwear  letter sizes        "M"
+#   tops / outerwear / dresses  letter sizes   "M"
 #   bottoms           letter sizes or waist in inches   "M" / "32"
 #   footwear          US men's sizes      "9.5"
 # The page matches these against the sizes you pick in Settings.
 
-SIZED = ("tops", "outerwear", "bottoms", "footwear")
+SIZED = ("tops", "outerwear", "dresses", "bottoms", "footwear")
 LETTERS = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"]
 ALPHA = {
     "xxs": "XXS", "2xs": "XXS", "xxsmall": "XXS",
@@ -588,7 +592,11 @@ def main():
                     # "collections": ["visvim", ...] reads only those brand collections. It's for big
                     # retailers that rate-limit a full catalog read but stock a few brands worth tracking.
                     seen = set()
-                    for path in [f"/collections/{c}" for c in store.get("collections", [])] or [""]:
+                    for c in store.get("collections") or [None]:
+                        path = f"/collections/{c}" if c else ""
+                        # "all": true lists the store's whole in-stock range, not only its discounts;
+                        # "all": ["visvim"] does that for just those collections.
+                        full = store.get("all") is True or c in (store.get("all") or [])
                         try:
                             for p in shopify_feed(host, path, max_pages):
                                 it = shopify_item(host, p)
@@ -598,8 +606,7 @@ def main():
                                 if p.get("handle") in wanted:
                                     found.append((it, "wish"))
                                     wanted.discard(p.get("handle"))
-                                # "all": true lists the store's whole in-stock range, not only its discounts
-                                if it["avail"] and (it["off"] >= min_off or store.get("all")):
+                                if it["avail"] and (it["off"] >= min_off or full):
                                     listed.append(it)
                         except Exception as e:
                             errors.append(f"catalog{path}: {e}")
