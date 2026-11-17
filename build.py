@@ -500,6 +500,23 @@ def usd_rates(previous):
     return {**FALLBACK_RATES, **(previous.get("rates") or {})}
 
 
+# ---------------------------------------------------------------- price history
+
+# Stores that quote converted prices drift a little with exchange rates every day.
+# A move smaller than this share of the price is treated as the same price, not a change.
+NOISE = 0.03
+
+
+def record_price(h, day, price):
+    """Add a price reading to h, a list of [day, price] points, one per real price change."""
+    if h and h[-1][0] == day:
+        h.pop()                              # one point per day: the latest reading wins
+    if h and abs(price - h[-1][1]) < NOISE * h[-1][1]:
+        h[-1][1] = price                     # same price level: keep it current, add no point
+    else:
+        h.append([day, price])
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -662,18 +679,15 @@ def main():
                 it["usd"] = round(it["price"] / rates[it["cur"]], 2)
         if it.get("stale"):
             continue
-        # Price history: one record per item, a new point only when the price changes.
+        # Price history: one record per item, a new point only when the price really changes.
         rec = prices.setdefault(it["id"], {"first": TODAY, "h": []})
         rec["last"], h, price = TODAY, rec["h"], it.get("price")
-        if price is not None and (not h or h[-1][1] != price):
-            if h and h[-1][0] == TODAY:
-                h.pop()                                  # one point per day: the latest wins
-            if not h or h[-1][1] != price:
-                h.append([TODAY, price])
+        if price is not None:
+            record_price(h, TODAY, price)
             del h[:-30]
         it["first_seen"] = rec["first"]
         it.pop("hist", None)
-        if len(h) > 1:
+        if price is not None and len(h) > 1:
             it["hist"] = h[-12:]
             high = max(p for _, p in h)
             if not it["off"] and high > price:

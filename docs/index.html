@@ -139,7 +139,8 @@
       <option value="50">50%+ off</option><option value="60">60%+ off</option>
     </select>
     <select id="sort" aria-label="Sort">
-      <option value="best">Best deals</option><option value="off">Biggest discount</option><option value="new">Newest</option>
+      <option value="best">Best deals</option><option value="off">Biggest discount</option>
+      <option value="drop">Biggest price drop</option><option value="low">At lowest price so far</option><option value="new">Newest</option>
       <option value="lo">Price: low to high</option><option value="hi">Price: high to low</option>
       <option value="store">Store</option>
     </select>
@@ -316,12 +317,17 @@ function storeShown(i) {
   if (ruledOut(i) || (crowdedOut(i) && $("store").value !== i.store)) return false;   // picking a store by name still shows it
   return !want || (want === "none" ? !mine.length : mine.includes(want.slice(2)));
 }
+// Tracked prices. hist is the item's list of [day, price] change points (only present once the price has changed).
+// A price within 3% of the lowest counts as "at its lowest", the same margin the build uses for exchange-rate drift.
+const trackedLow = i => Math.min(...i.hist.map(h => h[1])), trackedHigh = i => Math.max(...i.hist.map(h => h[1]));
+const atLow = i => !!i.hist && i.price != null && i.price <= trackedLow(i) * 1.03;
+const dropShare = i => i.hist && i.price != null ? (trackedHigh(i) - i.price) / trackedHigh(i) : 0;   // share below its highest tracked price
 // Best-deals score: the discount, plus signals that it is a deal for you. Tune the weights here.
 function score(i, brands) {
   let s = (i.off || 0) >= 90 ? 30 : i.off || 0;              // 90%+ off is almost always a listing error
   if (brands.has(brandKey(i.brand))) s += 25;                // a brand you follow
   if (i.sz && !i.sz.includes("OS") && wantedSizes(i.kind).length && sizeOK(i)) s += 10;   // in stock in your size
-  if (i.hist && i.price <= Math.min(...i.hist.map(h => h[1]))) s += 10;                 // lowest price tracked
+  if (atLow(i)) s += 10;                                     // at its lowest tracked price
   if (i.first_seen && daysSince(i.first_seen) <= 3) s += 5;  // just appeared
   if ((i.usd ?? i.price ?? 99) < 15) s -= 15;                // stickers and socks
   return s;
@@ -361,7 +367,13 @@ function filtered(items, brands) {
     (!q || (i.title + " " + (i.brand || "") + " " + i.store_name).toLowerCase().includes(q)));
   const usd = i => i.usd ?? i.price;                         // compare prices in one currency
   const sc = new Map(list.map(i => [i, score(i, brands)]));
+  // "At lowest price so far": items at their tracked low first (biggest drop first), then items above
+  // their low (closest first), then items whose price has never changed.
+  const lowRank = i => atLow(i) ? [0, -dropShare(i)] : i.hist && i.price != null ? [1, i.price / trackedLow(i)] : [2, -(i.off || 0)];
+  const lr = $("sort").value === "low" ? new Map(list.map(i => [i, lowRank(i)])) : null;
   const by = {
+    drop: (a, b) => dropShare(b) - dropShare(a) || (b.off || 0) - (a.off || 0),
+    low: (a, b) => lr.get(a)[0] - lr.get(b)[0] || lr.get(a)[1] - lr.get(b)[1],
     best: (a, b) => sc.get(b) - sc.get(a) || (b.off || 0) - (a.off || 0),
     off: (a, b) => (b.off || 0) - (a.off || 0),
     new: (a, b) => (b.first_seen || "").localeCompare(a.first_seen || ""),
@@ -457,7 +469,8 @@ function spark(i) {
   path.setAttribute("d", d); dot.setAttribute("cx", W - 4); dot.setAttribute("cy", y(i.price)); dot.setAttribute("r", 2.5);
   svg.append(title, path, dot);
   const row = el("div", "hist"); row.append(svg);
-  row.append(el("span", null, i.price <= lo ? "Lowest price tracked" : "Low was " + money(lo, i.cur)));
+  row.append(el("span", null, atLow(i) ? "Lowest so far, down " + Math.round(dropShare(i) * 100) + "% from " + money(hi, i.cur)
+                                             : "Low was " + money(lo, i.cur)));
   return row;
 }
 
