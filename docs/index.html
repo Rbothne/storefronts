@@ -55,7 +55,11 @@
   .org[aria-pressed="true"] { background: var(--accent); color: var(--bg); border-color: var(--accent); }
   .hist { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
   .hist path { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linejoin: round; }
-  .hist circle { fill: var(--accent); }
+  .hist svg { flex: none; overflow: visible; }   /* never squeeze the chart, never clip the dot */
+  .hist circle { stroke: var(--card); stroke-width: 1; }
+  .hist .low { fill: #0ca30c; }    /* at its lowest tracked price */
+  .hist .mid { fill: #fab219; }    /* somewhere in between */
+  .hist .high { fill: #d03b3b; }   /* at its highest tracked price */
   .body { padding: 9px 10px 10px; display: flex; flex-direction: column; gap: 3px; }
   .store { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
   .title { font-weight: 600; overflow-wrap: anywhere; }
@@ -455,22 +459,27 @@ function orgButton(i) {
 }
 // Price history sparkline: a step line (a price holds until it changes), scaled by date, today's price marked.
 function spark(i) {
-  const NS = "http://www.w3.org/2000/svg", W = 64, H = 18, h = i.hist, ps = h.map(p => p[1]);
+  const NS = "http://www.w3.org/2000/svg", W = 64, H = 20, h = i.hist, ps = h.map(p => p[1]);
   const lo = Math.min(...ps), hi = Math.max(...ps), t = d => Date.parse(d + "T00:00:00Z");
   const t0 = t(h[0][0]), t1 = Math.max(Date.now(), t(h[h.length - 1][0]) + 864e5);
-  const x = d => (3 + (t(d) - t0) / (t1 - t0) * (W - 7)).toFixed(1), y = p => (3 + (H - 6) * (hi - p) / (hi - lo)).toFixed(1);
+  const x = d => (3 + (t(d) - t0) / (t1 - t0) * (W - 9)).toFixed(1), y = p => (4 + (H - 8) * (hi - p) / (hi - lo)).toFixed(1);
   let d = "M" + x(h[0][0]) + "," + y(ps[0]);
   for (let n = 1; n < h.length; n++) d += "H" + x(h[n][0]) + "V" + y(ps[n]);
-  d += "H" + (W - 4);
+  d += "H" + (W - 5);
   const svg = document.createElementNS(NS, "svg"), path = document.createElementNS(NS, "path"), dot = document.createElementNS(NS, "circle");
   const title = document.createElementNS(NS, "title");
   title.textContent = "Price history: " + h.map(([day, p]) => day.slice(5) + " " + money(p, i.cur)).join(" → ");
   svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", title.textContent);
-  path.setAttribute("d", d); dot.setAttribute("cx", W - 4); dot.setAttribute("cy", y(i.price)); dot.setAttribute("r", 2.5);
+  // Today's price as a dot: green at its tracked low, red at its tracked high, yellow in between
+  // (within 3% counts as at, the margin the build uses for exchange-rate drift). The label says the same in words.
+  const level = atLow(i) ? "low" : i.price >= hi * 0.97 ? "high" : "mid";
+  path.setAttribute("d", d); dot.setAttribute("cx", W - 5); dot.setAttribute("cy", y(i.price)); dot.setAttribute("r", 3.5);
+  dot.setAttribute("class", level);
   svg.append(title, path, dot);
   const row = el("div", "hist"); row.append(svg);
-  row.append(el("span", null, atLow(i) ? "Lowest so far, down " + Math.round(dropShare(i) * 100) + "% from " + money(hi, i.cur)
-                                             : "Low was " + money(lo, i.cur)));
+  row.append(el("span", null, level === "low" ? "Lowest so far, down " + Math.round(dropShare(i) * 100) + "% from " + money(hi, i.cur)
+                             : level === "high" ? "Highest tracked; low was " + money(lo, i.cur)
+                             : "Low was " + money(lo, i.cur)));
   return row;
 }
 

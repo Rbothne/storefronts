@@ -2,7 +2,6 @@
   "settings": {
     "min_discount": 20,
     "max_pages": 65,
-    "max_items_per_store": 750,
     "workers": 6,
     "delay_seconds": 1.0
   },
@@ -126,6 +125,25 @@
     {"host": "www.svrn.com", "name": "SVRN", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
     {"host": "thewebster.com", "name": "The Webster", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
     {"host": "tres-bien.com", "name": "Très Bien", "platform": "shopify", "group": "clothing", "currency": "EUR", "browse": true},
+
+    {"host": "ateliernewyork.com", "name": "Atelier New York", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "toddsnyder.com", "name": "Todd Snyder", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "fivestoryny.com", "name": "Fivestory", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "stoffa.co", "name": "Stoffa", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "www.assemblynewyork.com", "name": "Assembly New York", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "www.alexmill.com", "name": "Alex Mill", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "pilgrimsurfsupply.com", "name": "Pilgrim Surf + Supply", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "www.saturdaysnyc.com", "name": "Saturdays NYC", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "extrabutterny.com", "name": "Extra Butter", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "misterfreedom.com", "name": "Mister Freedom", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "www.virgilnormal.com", "name": "Virgil Normal", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "americanrag.com", "name": "American Rag", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "cherryla.com", "name": "Cherry LA", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "reese-cooper.com", "name": "Reese Cooper", "platform": "shopify", "group": "clothing", "currency": "USD", "browse": true},
+    {"host": "leffot.com", "name": "Leffot", "platform": "page", "group": "clothing", "currency": "USD"},
+    {"host": "thebkcircus.com", "name": "The Brooklyn Circus", "platform": "page", "group": "clothing", "currency": "USD"},
+    {"host": "nalatanalata.com", "name": "Nalata Nalata", "platform": "page", "group": "clothing", "currency": "USD"},
+    {"host": "buckmason.com", "name": "Buck Mason", "platform": "page", "group": "clothing", "currency": "USD"},
 
     {"host": "bigloverecords.jp", "name": "Big Love Records", "platform": "shopify", "group": "music", "currency": "JPY", "browse": true},
     {"host": "organicmusic.jp", "name": "Organic Music", "platform": "shopify", "group": "music", "currency": "JPY", "browse": true},

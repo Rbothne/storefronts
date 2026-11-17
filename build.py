@@ -527,7 +527,7 @@ def main():
     settings = cfg.get("settings", {})
     min_off = settings.get("min_discount", 20)
     max_pages = settings.get("max_pages", 20)
-    max_items = settings.get("max_items_per_store", 750)
+    max_items = settings.get("max_items_per_store") or None   # None: no cap
     DELAY = settings.get("delay_seconds", 1.0)
     stores = {s["host"]: s for s in cfg["stores"]}
 
