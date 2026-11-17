@@ -585,19 +585,24 @@ def main():
                 if store.get("browse") or wanted:
                     store["currency"] = served_currency(host) or store.get("currency", "USD")
                 if store.get("browse"):
-                    try:
-                        for p in shopify_feed(host, "", max_pages):
-                            it = shopify_item(host, p)
-                            if not it:
-                                continue
-                            if p.get("handle") in wanted:
-                                found.append((it, "wish"))
-                                wanted.discard(p.get("handle"))
-                            # "all": true lists the store's whole in-stock range, not only its discounts
-                            if it["avail"] and (it["off"] >= min_off or store.get("all")):
-                                listed.append(it)
-                    except Exception as e:
-                        errors.append(f"catalog: {e}")
+                    # "collections": ["visvim", ...] reads only those brand collections. It's for big
+                    # retailers that rate-limit a full catalog read but stock a few brands worth tracking.
+                    seen = set()
+                    for path in [f"/collections/{c}" for c in store.get("collections", [])] or [""]:
+                        try:
+                            for p in shopify_feed(host, path, max_pages):
+                                it = shopify_item(host, p)
+                                if not it or p.get("handle") in seen:
+                                    continue
+                                seen.add(p.get("handle"))
+                                if p.get("handle") in wanted:
+                                    found.append((it, "wish"))
+                                    wanted.discard(p.get("handle"))
+                                # "all": true lists the store's whole in-stock range, not only its discounts
+                                if it["avail"] and (it["off"] >= min_off or store.get("all")):
+                                    listed.append(it)
+                        except Exception as e:
+                            errors.append(f"catalog{path}: {e}")
                     # A few stores would swamp the rest, so keep each store's deepest discounts.
                     listed.sort(key=lambda it: -it["off"])
                     found += [(it, "sale" if it["off"] >= min_off else "full") for it in listed[:max_items]]
