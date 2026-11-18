@@ -145,7 +145,7 @@
     <select id="sort" aria-label="Sort by">
       <option value="best">Best deals</option><option value="off">Discount</option>
       <option value="store_rel">Deal for its store</option><option value="brand_rel">Deal for its brand</option>
-      <option value="drop">Price drop</option><option value="low">At lowest price so far</option>
+      <option value="drop">Price change</option><option value="low">Lowest or highest so far</option>
       <option value="new">Date added</option><option value="price">Price</option><option value="store">Store</option>
     </select>
     <button class="pill" id="dir" title="Reverse the order"></button>
@@ -360,8 +360,11 @@ function storeShown(i) {
 const trackedLow = i => Math.min(...i.hist.map(h => h[1])), trackedHigh = i => Math.max(...i.hist.map(h => h[1]));
 const atLow = i => !!i.hist && i.price != null && i.price <= trackedLow(i) * 1.03;
 const dropShare = i => i.hist && i.price != null ? (trackedHigh(i) - i.price) / trackedHigh(i) : 0;   // share below its highest tracked price
+const riseShare = i => i.hist && i.price != null ? (i.price - trackedLow(i)) / trackedLow(i) : 0;   // share above its lowest tracked price
 const dropped = i => dropShare(i) >= 0.03;                  // its price really fell while tracked (3%: the build's noise margin)
-const newLow = i => dropped(i) && atLow(i);                 // ... and it is still at the lowest price seen
+const rose = i => riseShare(i) >= 0.03;                     // ... or really rose
+const newLow = i => dropped(i) && atLow(i);                 // fell, and is still at the lowest price seen
+const newHigh = i => rose(i) && i.price >= trackedHigh(i) * 0.97;   // rose, and is still at the highest price seen
 const changedOn = i => i.hist[i.hist.length - 1][0];        // day of its latest price change
 const highOn = i => [...i.hist].reverse().find(h => h[1] === trackedHigh(i))[0];   // latest day it was at its high
 const shortDay = d => new Date(d + "T12:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -408,7 +411,7 @@ function filtered(items, brands) {
   const list = items.filter(i =>
     inTab(i, tab, brands) &&
     // the two price-history sorts list only items whose price actually fell while tracked
-    (sort !== "drop" || dropped(i)) && (sort !== "low" || newLow(i)) &&
+    (sort !== "drop" || dropped(i) || rose(i)) && (sort !== "low" || (dir < 0 ? newLow(i) : newHigh(i))) &&
     (!g || i.group === g || i.group + "/" + i.kind === g) && (!s || i.store === s) &&
     (i.off || 0) >= min && (!stock || i.avail === true) && (!mine || sizeOK(i)) &&
     (!gen || !i.g || i.g === gen) &&                         // unlabelled items count as unisex
@@ -431,8 +434,10 @@ const SORTS = {
   off: { key: i => i.off || 0, dir: -1, words: HIGH },
   store_rel: { key: i => rel(i, "store"), dir: -1, words: ["Most unusual first", "Most routine first"] },
   brand_rel: { key: i => rel(i, "brand"), dir: -1, words: ["Most unusual first", "Most routine first"] },
-  drop: { key: dropShare, dir: -1, words: ["Biggest fall first", "Smallest fall first"] },
-  low: { key: i => Date.parse(changedOn(i)) / 864e5 + dropShare(i) * 0.99, dir: -1, words: ["Newest first", "Oldest first"] },
+  // drop below its high counts up, rise above its low counts down: one scale from biggest drop to biggest rise
+  drop: { key: i => dropShare(i) - riseShare(i), dir: -1, words: ["Biggest drop first", "Biggest rise first"] },
+  // the direction picks the list: items at their tracked low (biggest drop first) or at their high (biggest rise first)
+  low: { key: i => dir < 0 ? dropShare(i) : -riseShare(i), dir: -1, words: ["At lowest so far", "At highest so far"] },
   new: { key: i => i.first_seen || null, dir: -1, words: ["Newest first", "Oldest first"] },
   price: { key: i => i.usd ?? i.price ?? null, dir: 1, words: HIGH },   // compared in US dollars
   store: { key: i => i.store_name + "\u0001" + i.title, dir: 1, words: ["Z to A", "A to Z"] },
@@ -531,7 +536,7 @@ function spark(i) {
   const row = el("div", "hist"); row.append(svg);
   const pct = Math.round(dropShare(i) * 100) + "%";
   row.append(el("span", null, level === "low" ? "New low: " + pct + " under " + money(hi, i.cur) + " on " + shortDay(highOn(i))
-                             : level === "high" ? "Up from " + money(lo, i.cur) + " since " + shortDay(changedOn(i))
+                             : level === "high" ? "Up " + Math.round(riseShare(i) * 100) + "% from " + money(lo, i.cur) + " since " + shortDay(changedOn(i))
                              : pct + " under its high of " + money(hi, i.cur) + "; low " + money(lo, i.cur)));
   return row;
 }
@@ -586,9 +591,10 @@ function render() {
   if (!list.length) grid.replaceChildren(el("div", "empty", tab === "brands" && !brands.size
     ? "Star an item (☆) to see everything on sale from its brand."
     : tab === "wish" && !items.some(isFollowed) ? "Nothing followed yet. Star an item (☆) or add links to wishlist.txt."
-    : HISTORY_SORT[$("sort").value] ? "No tracked price drops match these filters yet. Prices are checked twice a day, so these lists grow over time."
+    : HISTORY_SORT[$("sort").value] ? "No tracked price changes match these filters yet. Prices are checked twice a day, so these lists grow over time."
     : "Nothing matches these filters."));
-  let text = list.length + (list.length === 1 ? " item" : " items") + (HISTORY_SORT[$("sort").value] || "");
+  const hs = HISTORY_SORT[$("sort").value];
+  let text = list.length + (list.length === 1 ? " item" : " items") + (hs ? hs[dir < 0 ? 0 : 1] : "");
   if (tab === "brands" && list.length)                       // name only the brands that have something to show
     text += " from brands you follow: " + [...new Set(list.map(i => brands.get(brandKey(i.brand))))].sort().join(", ");
   const quiet = tab === "wish" || $("storecat").value === "crowded" ? 0 : [...CROWD.hosts].filter(h => crowdedOut({ store: h }) && $("store").value !== h).length;
@@ -600,7 +606,8 @@ function render() {
 }
 function reset() { shown = PAGE; render(); }
 // What the price-history sorts list, said under the filters (prices are tracked from the day an item is first seen).
-const HISTORY_SORT = { drop: " whose price fell while tracked", low: " that fell to their lowest tracked price" };
+const HISTORY_SORT = { drop: [" whose price changed while tracked", " whose price changed while tracked"],
+                       low: [" that fell to their lowest tracked price", " that rose to their highest tracked price"] };
 
 // ---- settings panel
 function chips(box, values, chosen) {

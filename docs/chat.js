@@ -52,7 +52,7 @@ const TOOLS = [
         min_discount: { type: "number", description: "Lowest discount in percent, for example 40." },
         in_my_sizes: { type: "boolean", description: "Only items in stock in the sizes from the profile. Items with no readable size are kept." },
         fits: { type: "string", enum: ["men", "women"], description: "Leave out women's-only or men's-only items. Unlabelled items count as unisex and are kept." },
-        sort: { type: "string", enum: ["best", "discount", "deal_for_store", "deal_for_brand", "price_drop", "lowest_so_far", "price_low", "price_high", "newest"], description: "Order of results. \"best\" weighs discount (half its size, half how unusual it is at that store), followed brands, the person's sizes and price history. \"deal_for_store\" and \"deal_for_brand\" put first the markdowns most unusual for their store, or for their brand across all stores (some stores mark everything 70% off, so a raw percentage can mislead). \"price_drop\" lists only items whose price fell while tracked, largest fall from their highest tracked price first; \"lowest_so_far\" lists only items that fell to their lowest tracked price, most recent first. Default \"best\"." },
+        sort: { type: "string", enum: ["best", "discount", "deal_for_store", "deal_for_brand", "price_drop", "price_rise", "lowest_so_far", "highest_so_far", "price_low", "price_high", "newest"], description: "Order of results. \"best\" weighs discount (half its size, half how unusual it is at that store), followed brands, the person's sizes and price history. \"deal_for_store\" and \"deal_for_brand\" put first the markdowns most unusual for their store, or for their brand across all stores (some stores mark everything 70% off, so a raw percentage can mislead). \"price_drop\" lists only items whose price fell while tracked, largest fall from their highest tracked price first; \"lowest_so_far\" lists only items that fell to their lowest tracked price, biggest drop first. \"price_rise\" and \"highest_so_far\" are the mirror images (items whose price went up), for spotting bad deals and inflated prices. Default \"best\"." },
         limit: { type: "integer", description: "How many results to return, from 1 to 30. Default 15." },
       },
       additionalProperties: false,
@@ -119,7 +119,7 @@ function brief(i) {
   if (i.g) o.fits = { m: "men", w: "women", k: "kids" }[i.g];
   if (isFollowed(i)) o.followed = true;
   if (prefs.itemCats[i.id]) o.my_categories = prefs.itemCats[i.id];
-  if (i.hist) { o.price_history = i.hist; if (newLow(i)) o.at_lowest_tracked_price = true; }
+  if (i.hist) { o.price_history = i.hist; if (newLow(i)) o.at_lowest_tracked_price = true; if (newHigh(i)) o.at_highest_tracked_price = true; }
   if (i.avail === false) o.sold_out = true;
   o.first_seen = i.first_seen; o.url = i.url;
   return o;
@@ -138,14 +138,18 @@ function searchItems(a) {
   });
   // like the page, the price-history sorts keep only items whose price actually fell
   if (a.sort === "price_drop") list = list.filter(dropped);
+  if (a.sort === "price_rise") list = list.filter(rose);
   if (a.sort === "lowest_so_far") list = list.filter(newLow);
+  if (a.sort === "highest_so_far") list = list.filter(newHigh);
   const usd = i => i.usd ?? i.price ?? 0, sc = new Map(list.map(i => [i, score(i, brands)]));
   list.sort({ best: (x, y) => sc.get(y) - sc.get(x), discount: (x, y) => (y.off || 0) - (x.off || 0),
               price_low: (x, y) => usd(x) - usd(y), price_high: (x, y) => usd(y) - usd(x),
               deal_for_store: (x, y) => (rel(y, "store") ?? -1) - (rel(x, "store") ?? -1) || (y.off || 0) - (x.off || 0),
               deal_for_brand: (x, y) => (rel(y, "brand") ?? -1) - (rel(x, "brand") ?? -1) || (y.off || 0) - (x.off || 0),
               price_drop: (x, y) => dropShare(y) - dropShare(x) || (y.off || 0) - (x.off || 0),
-              lowest_so_far: (x, y) => changedOn(y).localeCompare(changedOn(x)) || dropShare(y) - dropShare(x),
+              price_rise: (x, y) => riseShare(y) - riseShare(x),
+              lowest_so_far: (x, y) => dropShare(y) - dropShare(x),
+              highest_so_far: (x, y) => riseShare(y) - riseShare(x),
               newest: (x, y) => (y.first_seen || "").localeCompare(x.first_seen || "") }[a.sort || "best"]);
   const limit = Math.min(Math.max(a.limit || 15, 1), 30);
   return { site_last_updated: DATA.generated, total_matches: list.length, showing: Math.min(limit, list.length), items: list.slice(0, limit).map(brief) };
