@@ -109,6 +109,7 @@ function brief(i) {
   if (i.cur !== "USD" && i.usd != null) o.usd = i.usd;
   if (i.off) {
     o.was = i.was; o.percent_off = i.off;
+    if (inflated(i)) o.original_price_looks_inflated = true;   // 5x today's price or 90%+ off: treat the discount with suspicion
     // the discount in context: the store's (and the brand's) usual markdown, and the share of them this one beats
     for (const kind of ["store", "brand"]) {
       const st = standing(i, kind);

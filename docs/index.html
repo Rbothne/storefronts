@@ -349,6 +349,9 @@ function standing(i, kind) {
   return { n, median: a[n >> 1], beats: (below + ties / 2) / n, score: (below + ties / 2 + SHRINK / 2) / (n + SHRINK) };
 }
 const rel = (i, kind) => standing(i, kind)?.score ?? null;
+// A stated original price 5 times today's, or a 90%+ discount, is almost never a real markdown: usually a padded
+// "was" price or a listing error. Such items are flagged, not hidden (Top picks already counts 90%+ off as 30%).
+const inflated = i => !i.tracked_drop && ((i.off || 0) >= 90 || (i.was && i.price && i.was >= 5 * i.price));
 function offNote(i) {                                        // badge tooltip: the discount in context
   const parts = [i.off + "% off"];
   for (const [kind, name] of [["store", i.store_name], ["brand", i.brand]]) {
@@ -612,6 +615,7 @@ function card(i) {
   if (prefs.itemCats[i.id]) notes.push("In: " + prefs.itemCats[i.id].join(", "));
   if (i.gone) notes.push("No longer listed; showing its last known details");
   if (i.tracked_drop) notes.push("Down from highest price tracked");
+  if (inflated(i)) notes.push("Original price looks inflated");
   const by = { store_rel: "store", brand_rel: "brand" }[$("sort").value], st = by && standing(i, by);
   if (st) notes.push("Beats " + Math.round(st.beats * 100) + "% of " + (by === "store" ? i.store_name : i.brand) +
                      " markdowns (typically " + st.median + "%)");
