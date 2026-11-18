@@ -661,9 +661,9 @@ function render() {
     }
   }
   const hours = DATA.generated ? (Date.now() - Date.parse(DATA.generated)) / 36e5 : null;
-  if (hours != null) {                                        // twice-daily updates: older than 18 h means a run was missed
-    const age = el("span", hours > 18 ? "stale" : null, " · Updated " + (hours < 1 ? "under an hour" : Math.round(hours) + " h") + " ago");
-    if (hours > 18) age.title = "The twice-daily update seems to have missed a run.";
+  if (hours != null) {                                        // hourly updates (GitHub starts some late): 6 h means several were missed
+    const age = el("span", hours > 6 ? "stale" : null, " · Updated " + (hours < 1 ? "under an hour" : Math.round(hours) + " h") + " ago");
+    if (hours > 6) age.title = "The hourly updates seem to have stopped.";
     parts.push(age);
   }
   $("count").replaceChildren(...parts);

@@ -25,7 +25,8 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
 TODAY = datetime.date.today().isoformat()
 DELAY = 1.0
-RETRY_PAUSE = 120     # seconds to wait before the second pass over rate-limited stores
+COME_BACK = 180       # the come-back pass over rate-limited stores starts at least this long after the run did
+PATIENT = False       # True during the come-back pass: wait and retry on 429 instead of moving on
 
 
 # ---------------------------------------------------------------- fetching
@@ -33,8 +34,9 @@ RETRY_PAUSE = 120     # seconds to wait before the second pass over rate-limited
 def get(url, timeout=25, tries=3):
     """Return (status, text). Never raises.
 
-    A 429 (too many requests) or a server error is retried after a wait: the server's Retry-After when it
-    gives one (capped at a minute), otherwise 15 s and then 45 s.
+    A server error is retried after a wait. A 429 (too many requests) is not, on the first pass: the store is
+    left for later and the run moves on to other stores (see main()). On the come-back pass (PATIENT) a 429 is
+    retried after the server's Retry-After when it gives one (capped at a minute), otherwise 15 s and then 45 s.
     """
     for attempt in range(tries):
         req = urllib.request.Request(url, headers={
@@ -48,7 +50,7 @@ def get(url, timeout=25, tries=3):
                 return r.status, body
         except urllib.error.HTTPError as e:
             status = e.code
-            if status in (429, 500, 502, 503, 504) and attempt + 1 < tries:
+            if status in (429, 500, 502, 503, 504) and attempt + 1 < tries and (status != 429 or PATIENT):
                 wait = (15, 45)[min(attempt, 1)]
                 try:
                     wait = min(60, max(wait, int(e.headers.get("Retry-After", ""))))
@@ -174,8 +176,10 @@ def shopify_feed(host, path, max_pages):
         except Exception:
             products = None
         if products is None:
-            if page == 1:
-                raise RuntimeError(f"feed returned HTTP {status}")
+            # a refusal partway through would otherwise leave a silently partial catalogue: report it, so the
+            # store is fetched again on the come-back pass
+            if page == 1 or status == 429:
+                raise RuntimeError(f"feed returned HTTP {status}" + (f" on page {page}" if page > 1 else ""))
             return
         if not products:
             return
@@ -534,7 +538,11 @@ def record_price(h, day, price):
 # ---------------------------------------------------------------- main
 
 def main():
-    global DELAY
+    """Build docs/data.json. `--stalest N` refreshes only the N stores fetched longest ago (link-only stores, which
+    cost nothing, always run); every other store keeps its items and status from the last run. The hourly runs
+    use it; the daily full run, and runs after a change to the stores or this script, refresh everything."""
+    global DELAY, PATIENT
+    stalest = int(sys.argv[sys.argv.index("--stalest") + 1]) if "--stalest" in sys.argv else None
     cfg = load_json(os.path.join(ROOT, "stores.json"), None)
     if not cfg:
         sys.exit("stores.json missing or invalid")
@@ -549,6 +557,8 @@ def main():
     out_path = os.path.join(ROOT, "docs", "data.json")
     state = load_json(state_path, {})
     previous = load_json(out_path, {"items": []})
+    fetched = state.get("fetched", {})          # host -> when it last refreshed without errors (UTC, to the minute)
+    NOW = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="minutes")
 
     # ---- sort wishlist URLs by store
     wish_products, wish_pages = {}, {}
@@ -648,23 +658,48 @@ def main():
             errors.append(f"unexpected: {e}")
         return found, errors, len(listed)
 
-    with concurrent.futures.ThreadPoolExecutor(settings.get("workers", 6)) as pool:
-        results = list(pool.map(fetch_store, list(stores)))
-
-    # Shopify sometimes rate-limits a whole run (HTTP 429 from nearly every store), apparently by the shared
-    # address of the machine running it. Give those stores one more, slower pass after a pause, rather than
-    # falling back to their items from the last run.
     hosts = list(stores)
+    if stalest is not None:
+        # never-fetched stores sort first (""), then the oldest refresh
+        feeds = sorted((h for h in hosts if stores[h]["platform"] != "link"), key=lambda h: fetched.get(h, ""))
+        chosen = set(feeds[:stalest]) | {h for h in hosts if stores[h]["platform"] == "link"}
+        hosts = [h for h in hosts if h in chosen]
+        print(f"refreshing the {min(stalest, len(feeds))} stores updated longest ago; the other {len(feeds) - min(stalest, len(feeds))} keep their items", flush=True)
+    started = time.time()
+    with concurrent.futures.ThreadPoolExecutor(settings.get("workers", 6)) as pool:
+        results = list(pool.map(fetch_store, hosts))
+
+    # A store that answers 429 (too many requests) is skipped on the first pass, so the run moves on to the
+    # others; Shopify sometimes rate-limits nearly a whole run, apparently by the shared address of the machine
+    # running it. Come back to those stores once the rest are done (and at least COME_BACK seconds after the
+    # run began), and only then wait and retry on a 429, a few stores at a time. Stores still refused fall back
+    # to their items from the last run.
     limited = [n for n, (_, errors, _) in enumerate(results) if any("429" in e for e in errors)]
     if limited:
-        print(f"{len(limited)} stores were rate-limited (HTTP 429); trying them again in {RETRY_PAUSE} s, more slowly", flush=True)
-        time.sleep(RETRY_PAUSE)
+        pause = max(0, COME_BACK - (time.time() - started))
+        print(f"{len(limited)} stores were rate-limited (HTTP 429); coming back to them in {pause:.0f} s", flush=True)
+        time.sleep(pause)
+        PATIENT = True
         with concurrent.futures.ThreadPoolExecutor(3) as pool:
             for n, again in zip(limited, pool.map(fetch_store, [hosts[n] for n in limited])):
                 results[n] = again
-        print(f"after the second pass, {sum(any('429' in e for e in results[n][1]) for n in limited)} still rate-limited", flush=True)
+        PATIENT = False
+        print(f"after coming back, {sum(any('429' in e for e in results[n][1]) for n in limited)} still rate-limited", flush=True)
 
-    for (host, store), (found, errors, qualified) in zip(stores.items(), results):
+    done = dict(zip(hosts, results))
+    old_status = {s["host"]: s for s in previous.get("status", [])}
+    for host, store in stores.items():
+        if host not in done:                   # not refreshed this run: keep last run's items and status as they were
+            for old in previous.get("items", []):
+                if old.get("store") == host and old["id"] not in items:
+                    old["carried"] = True
+                    items[old["id"]] = old
+            if host in old_status:
+                status.append(old_status[host])
+            continue
+        found, errors, qualified = done[host]
+        if not errors:
+            fetched[host] = NOW
         name, before = store.get("name", host), len(items)
         for item, tag in found:
             add(item, tag)
@@ -690,7 +725,8 @@ def main():
         if s.get("brand"):                       # brand-run stores whose own "vendor" field is not the brand
             it["brand"] = s["brand"]
         ptype = it.pop("ptype", "")
-        if not it.get("stale"):  # stale items keep the category they had
+        old = it.get("stale") or it.pop("carried", False)   # reused from the last run: keep what it had
+        if not old:
             group, kind = s.get("group", "other"), None
             # Clothing stores, and others marked "mixed", get sorted per item.
             # Pure kitchen / stationery shops don't: "Pen Cap" is not a hat.
@@ -705,14 +741,14 @@ def main():
         if not it.get("g"):
             it.pop("g", None)
         every =it.pop("sizes_all", None) or it["sizes"]
-        if not it.get("stale"):
+        if not old:
             sz = size_tokens(it["kind"], it["sizes"], every) if it["kind"] in SIZED else []
             it.pop("sz", None)
             if sz:
                 it["sz"] = sz
             if it.get("price") is not None and rates.get(it["cur"]):
                 it["usd"] = round(it["price"] / rates[it["cur"]], 2)
-        if it.get("stale"):
+        if old:
             continue
         # Price history: one record per item, a new point only when the price really changes.
         rec = prices.setdefault(it["id"], {"first": TODAY, "h": []})
@@ -736,10 +772,11 @@ def main():
     os.makedirs(os.path.dirname(state_path), exist_ok=True)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(state_path, "w", encoding="utf-8") as f:   # one item per line keeps git diffs small
-        f.write('{"prices":{\n' + ",\n".join(lines) + "\n}}\n")
+        f.write('{"prices":{\n' + ",\n".join(lines) + "\n},\n" +
+                '"fetched":' + json.dumps(dict(sorted(fetched.items())), separators=(",", ":")) + "}\n")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({
-            "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="minutes"),
+            "generated": NOW,
             "min_discount": min_off,
             "rates": {c: rates[c] for c in sorted({i["cur"] for i in items.values()}) if c in rates},
             "status": status,

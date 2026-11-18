@@ -2,11 +2,12 @@ name: Update listings
 
 on:
   schedule:
-    - cron: "17 11,23 * * *"   # twice a day (UTC): about 6:17 am and 6:17 pm Eastern
-  workflow_dispatch:            # lets you press "Run workflow" by hand
-  push:                         # a change to the page itself: republish it with the latest data, no rebuild
+    - cron: "17 11 * * *"       # once a day (UTC, about 6:17 am Eastern): refresh every store
+    - cron: "37 * * * *"        # every hour: refresh the 50 stores updated longest ago
+  workflow_dispatch:            # "Run workflow" by hand: refresh every store
+  push:                         # a change to the page republishes it; a change to the stores or the build refreshes everything
     branches: [main]
-    paths: ["docs/**", ".github/workflows/update.yml"]
+    paths: ["docs/**", "build.py", "stores.json", ".github/workflows/update.yml"]
 
 permissions:
   contents: write               # to replace the data branch
@@ -24,10 +25,26 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
-    env:
-      REBUILD: ${{ github.event_name != 'push' }}
     steps:
       - uses: actions/checkout@v4
+
+      # full: every store. hourly: the stores updated longest ago (each store comes round every few hours, and short
+      # runs are less likely to be rate-limited). publish: a page change, so no fetching at all.
+      - name: Decide what to run
+        run: |
+          python3 - >> "$GITHUB_ENV" <<'EOF'
+          import json, os
+          event, e = os.environ["GITHUB_EVENT_NAME"], json.load(open(os.environ["GITHUB_EVENT_PATH"]))
+          if event == "push":
+              changed = {f for c in e.get("commits", []) for k in ("added", "modified", "removed") for f in c.get(k, [])}
+              mode = "full" if changed & {"build.py", "stores.json"} else "publish"
+          elif event == "schedule" and e.get("schedule") == "37 * * * *":
+              mode = "hourly"
+          else:
+              mode = "full"
+          print(f"MODE={mode}")
+          print(f"REBUILD={'false' if mode == 'publish' else 'true'}")
+          EOF
 
       # The price history and the latest listings live on the "data" branch, which always holds a single commit:
       # every update replaces it, so the repository does not grow by tens of megabytes a day.
@@ -41,7 +58,9 @@ jobs:
 
       - name: Fetch stores and build data
         if: env.REBUILD == 'true'
-        run: python3 build.py
+        run: |
+          echo "mode: $MODE"
+          if [ "$MODE" = hourly ]; then python3 build.py --stalest 50; else python3 build.py; fi
 
       # A run that reads stores badly (a network problem, say) could find far fewer items. Saving its result would
       # lose good price history, so stop instead; the site keeps the previous data until the next run.
