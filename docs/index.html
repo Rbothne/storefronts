@@ -19,7 +19,12 @@
          font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
   header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line);
            padding: 10px 14px 8px; }
-  @media (max-width: 700px) { header { position: static; } }   /* the filters are too tall to pin on a phone */
+  #filtersbtn { display: none; }
+  @media (max-width: 700px) {                                   /* phones: tabs and search stay pinned, the rest folds away */
+    header { max-height: 100vh; overflow-y: auto; }
+    #filtersbtn { display: inline-block; }
+    header:not(.open) .filters > :not(#q):not(#filtersbtn) { display: none; }
+  }
   button { font: inherit; color: var(--ink); cursor: pointer; }
   .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
   .tabs button, .pill { border: 1px solid var(--line); background: var(--card); padding: 7px 12px; border-radius: 999px; }
@@ -35,6 +40,12 @@
   .filters .pill { padding: 5px 12px; }
   main { padding: 12px 14px 40px; }
   #count { color: var(--muted); margin: 0 0 10px; }
+  #count button { border: 0; background: none; padding: 0; color: var(--accent); text-decoration: underline; }
+  #count .stale { color: #e08a00; }
+  #toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 20; display: flex; gap: 12px;
+           align-items: center; background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 10px; }
+  #toast[hidden] { display: none; }
+  #toast button { border: 0; background: none; color: var(--bg); font-weight: 700; text-decoration: underline; padding: 0; }
   .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
   @media (min-width: 700px) { .grid { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); } }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; position: relative; }
@@ -51,15 +62,16 @@
           border: 1px solid var(--line); background: var(--card); font-size: 17px; line-height: 1; }
   .star[aria-pressed="true"] { color: var(--sale); }
   .star:disabled { cursor: default; opacity: .75; }
-  .org { top: 44px; font-weight: 700; }
+  .org { top: auto; bottom: 6px; width: 26px; height: 26px; font-size: 14px; font-weight: 700; }   /* bottom corner of the text, off the photo */
+  .body > :last-child { padding-right: 28px; }                   /* the last line leaves room for it */
   .org[aria-pressed="true"] { background: var(--accent); color: var(--bg); border-color: var(--accent); }
   .hist { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
   .hist path { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linejoin: round; }
   .hist svg { flex: none; overflow: visible; }   /* never squeeze the chart, never clip the dot */
   .hist circle { stroke: var(--card); stroke-width: 1; }
   .hist .low { fill: #0ca30c; }    /* at its lowest tracked price */
-  .hist .mid { fill: #fab219; }    /* somewhere in between */
-  .hist .high { fill: #d03b3b; }   /* at its highest tracked price */
+  .hist .mid { fill: var(--muted); }   /* somewhere in between */
+  .hist .high { fill: #e08a00; }   /* at its highest tracked price */
   .body { padding: 9px 10px 10px; display: flex; flex-direction: column; gap: 3px; }
   .store { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
   .title { font-weight: 600; overflow-wrap: anywhere; }
@@ -129,6 +141,7 @@
   <div class="tabs" id="tabs"></div>
   <div class="filters">
     <input type="search" id="q" placeholder="Search title, brand, store" aria-label="Search">
+    <button class="pill" id="filtersbtn" aria-expanded="false">Filters</button>
     <select id="group" aria-label="Category"></select>
     <select id="store" aria-label="Store"></select>
     <select id="itemcat" aria-label="My item categories"></select>
@@ -227,11 +240,13 @@
   <button class="pill" id="copylinks">Copy links of starred items</button>
 
   <h2>Backup</h2>
-  <p>Everything on this panel lives in this browser. Copy this text to move it to another device, or paste and load.</p>
-  <textarea id="backup" spellcheck="false" aria-label="Settings backup"></textarea>
-  <div class="bar"><button class="pill" id="loadbackup">Load pasted settings</button>
+  <p>Everything on this panel lives in this browser. Save it to a file to keep a copy or to move it to another device.</p>
+  <div class="bar"><span><button class="pill" id="savebackup">Download settings</button>
+    <label class="pill" id="loadlabel">Load settings file <input type="file" id="loadbackup" accept=".json,application/json" hidden></label></span>
     <button class="pill" id="closesettings">Done</button></div>
 </dialog>
+
+<div id="toast" role="status" hidden></div>
 
 <dialog id="organize">
   <div id="orgbody"></div>
@@ -421,21 +436,38 @@ function filtered(items, brands) {
     (!q || (i.title + " " + (i.brand || "") + " " + i.store_name).toLowerCase().includes(q)));
   const key = SORTS[sort].key, keys = new Map(list.map(i => [i, key(i, brands)]));
   const cmp = (x, y) => typeof x === "string" ? x.localeCompare(y) : x - y;
-  return list.sort((a, b) => {
+  list.sort((a, b) => {
     const x = keys.get(a), y = keys.get(b);
     if (x == null || y == null) return (x == null) - (y == null);   // nothing to sort on (no price, no markdown): last either way
     return dir * cmp(x, y) || (b.off || 0) - (a.off || 0) || a.title.localeCompare(b.title);
   });
+  return SORTS[sort].spread && !s ? spread(list) : list;
+}
+// The ranked sorts can put one big store's items in long runs (two screens of a single shop). Show the same order,
+// but never more than 2 in a row from one store: an item that would make a third waits for the next free slot.
+// Only the first few pages are arranged this way (later items fill gaps as needed); past that nobody is scrolling.
+function spread(list, head = 600) {
+  const out = [], wait = [];
+  const fits = i => !(out.length >= 2 && out[out.length - 1].store === i.store && out[out.length - 2].store === i.store);
+  let n = 0;
+  while (out.length < head && (n < list.length || wait.length)) {
+    const w = wait.findIndex(fits);
+    if (w >= 0) { out.push(wait.splice(w, 1)[0]); continue; }
+    if (n >= list.length) { out.push(wait.shift()); continue; }   // only one store left: let it run
+    const i = list[n++];
+    fits(i) ? out.push(i) : wait.push(i);
+  }
+  return out.concat(wait, list.slice(n));                    // the rest in ranked order
 }
 
 // Every sort is a key, the direction it starts in (-1: biggest first) and words for both directions.
 // The button beside the menu flips the direction; picking another sort starts it at its own default.
 const HIGH = ["High to low", "Low to high"];
 const SORTS = {
-  best: { key: (i, brands) => score(i, brands), dir: -1, words: HIGH },
+  best: { key: (i, brands) => score(i, brands), dir: -1, words: HIGH, spread: true },
   off: { key: i => i.off || 0, dir: -1, words: HIGH },
-  store_rel: { key: i => rel(i, "store"), dir: -1, words: ["Most unusual first", "Most routine first"] },
-  brand_rel: { key: i => rel(i, "brand"), dir: -1, words: ["Most unusual first", "Most routine first"] },
+  store_rel: { key: i => rel(i, "store"), dir: -1, words: ["Most unusual first", "Most routine first"], spread: true },
+  brand_rel: { key: i => rel(i, "brand"), dir: -1, words: ["Most unusual first", "Most routine first"], spread: true },
   // drop below its high counts up, rise above its low counts down: one scale from biggest drop to biggest rise
   drop: { key: i => dropShare(i) - riseShare(i), dir: -1, words: ["Biggest drop first", "Biggest rise first"] },
   // the direction picks the list: items at their tracked low (biggest drop first) or at their high (biggest rise first)
@@ -487,11 +519,22 @@ function catPicker(map, key, after) {
   draw();
   return box;
 }
-// A toggle chip for hiding a store or brand.
+// A chip for hiding a store or brand. Hiding acts at once: the dialog closes, the cards go, and a note offers Undo.
 function hideChip(label, map, key, value) {
   const b = el("button", null, label); b.setAttribute("aria-pressed", key in map);
-  b.onclick = () => { key in map ? delete map[key] : map[key] = value; savePrefs(); b.setAttribute("aria-pressed", key in map); };
+  b.onclick = () => {
+    if (key in map) { delete map[key]; savePrefs(); b.setAttribute("aria-pressed", false); return; }   // showing it again
+    map[key] = value; savePrefs(); $("organize").close();
+    toast("Hid " + value, () => { delete map[key]; savePrefs(); fillCatMenus(); render(); });
+  };
   return b;
+}
+let toastTimer;
+function toast(text, undo) {
+  const t = $("toast"), u = el("button", null, "Undo");
+  u.onclick = () => { t.hidden = true; undo(); };
+  t.replaceChildren(el("span", null, text), u); t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 8000);
 }
 // The ⋯ menu on a card: categories for this item and for its store, and hiding.
 function organize(i) {
@@ -537,8 +580,8 @@ function spark(i) {
   svg.append(title, path, dot);
   const row = el("div", "hist"); row.append(svg);
   const pct = Math.round(dropShare(i) * 100) + "%";
-  row.append(el("span", null, level === "low" ? "New low: " + pct + " under " + money(hi, i.cur) + " on " + shortDay(highOn(i))
-                             : level === "high" ? "Up " + Math.round(riseShare(i) * 100) + "% from " + money(lo, i.cur) + " since " + shortDay(changedOn(i))
+  row.append(el("span", null, level === "low" ? "↓ New low: " + pct + " under " + money(hi, i.cur) + " on " + shortDay(highOn(i))
+                             : level === "high" ? "↑ Up " + Math.round(riseShare(i) * 100) + "% from " + money(lo, i.cur) + " since " + shortDay(changedOn(i))
                              : pct + " under its high of " + money(hi, i.cur) + "; low " + money(lo, i.cur)));
   return row;
 }
@@ -599,9 +642,28 @@ function render() {
   let text = list.length + (list.length === 1 ? " item" : " items") + (hs ? hs[dir < 0 ? 0 : 1] : "");
   if (tab === "brands" && list.length)                       // name only the brands that have something to show
     text += " from brands you follow: " + [...new Set(list.map(i => brands.get(brandKey(i.brand))))].sort().join(", ");
-  const quiet = tab === "wish" || $("storecat").value === "crowded" ? 0 : [...CROWD.hosts].filter(h => crowdedOut({ store: h }) && $("store").value !== h).length;
-  if (quiet) text += " · " + quiet + " high-volume " + (quiet === 1 ? "store" : "stores") + " hidden";
-  $("count").textContent = text;
+  const parts = [text], calmBtn = label => { const b = el("button", null, label);
+    b.onclick = () => { prefs.calm = !prefs.calm; $("calm").checked = prefs.calm; savePrefs(); reset(); }; return b; };
+  if (tab !== "wish" && $("storecat").value !== "crowded" && CROWD.hosts.size) {
+    if (prefs.calm) {
+      const quiet = [...CROWD.hosts].filter(h => crowdedOut({ store: h }) && $("store").value !== h).length;
+      if (quiet) parts.push(" · " + quiet + " high-volume " + (quiet === 1 ? "store" : "stores") + " hidden (", calmBtn("show"), ")");
+    } else {
+      const big = DATA.items.filter(i => CROWD.hosts.has(i.store)).length;
+      parts.push(" · " + CROWD.hosts.size + " stores make up " + Math.round(big / DATA.items.length * 100) + "% of items (", calmBtn("hide them"), ")");
+    }
+  }
+  const hours = DATA.generated ? (Date.now() - Date.parse(DATA.generated)) / 36e5 : null;
+  if (hours != null) {                                        // twice-daily updates: older than 18 h means a run was missed
+    const age = el("span", hours > 18 ? "stale" : null, " · Updated " + (hours < 1 ? "under an hour" : Math.round(hours) + " h") + " ago");
+    if (hours > 18) age.title = "The twice-daily update seems to have missed a run.";
+    parts.push(age);
+  }
+  $("count").replaceChildren(...parts);
+  // phones: the Filters button says how many filters are set
+  const set = ["group", "store", "itemcat", "storecat", "gender"].filter(id => $(id).value).length + ($("minoff").value !== "0") +
+              ($("sort").value !== "best" || dir !== -1) + $("mysizes").checked + (tab === "wish" && $("stock").checked);
+  $("filtersbtn").textContent = "Filters" + (set ? " · " + set : "");
   $("more").hidden = list.length <= shown;
   $("more").textContent = "Show more (" + (list.length - shown) + " left)";
   counts(items, brands);
@@ -667,7 +729,6 @@ function drawSettings() {
     return b;
   }));
   if (!prefs.notes.length) $("noteslist").append(el("span", "meta", "Nothing saved yet."));
-  $("backup").value = JSON.stringify(prefs);
 }
 
 // The two "my categories" menus list whatever categories exist right now.
@@ -689,6 +750,15 @@ function fillCatMenus() {
 
 function setup() {
   IDS = new Set(DATA.items.map(i => i.id));
+  // Starred and categorised items keep a copy so they still show after they stop being listed. While an item is
+  // still listed, refresh its copy, so a later drop-out keeps its latest price and history, not the day it was starred.
+  const byId = new Map(DATA.items.map(i => [i.id, i]));
+  let fresh = false;
+  for (const map of [prefs.follows, prefs.kept]) for (const id of Object.keys(map)) {
+    const it = byId.get(id);
+    if (it) { const { tags, gone, ...copy } = it; map[id] = copy; fresh = true; }
+  }
+  if (fresh) savePrefs();
   CROWD = crowd();
   REL = relStats();
   for (const [key, label] of TABS) {
@@ -729,10 +799,18 @@ function setup() {
     const links = Object.values(prefs.follows).map(f => f.url).join("\n");
     navigator.clipboard.writeText(links).then(() => { $("copylinks").textContent = "Copied " + Object.keys(prefs.follows).length + " links"; });
   };
-  $("loadbackup").onclick = () => {
-    try { loadPrefs($("backup").value); savePrefs(); $("gender").value = prefs.gender; drawSettings(); fillCatMenus(); reset(); $("loadbackup").textContent = "Loaded"; }
-    catch (e) { $("loadbackup").textContent = "That text is not a valid backup"; }
+  $("savebackup").onclick = () => {                         // a dated .json file of everything in prefs
+    const a = el("a"); a.download = "listings-settings-" + new Date().toISOString().slice(0, 10) + ".json";
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(prefs, null, 1)], { type: "application/json" }));
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
+  $("loadbackup").onchange = async () => {
+    const f = $("loadbackup").files[0], label = $("loadlabel").firstChild;
+    try { loadPrefs(await f.text()); savePrefs(); $("gender").value = prefs.gender; drawSettings(); fillCatMenus(); reset(); label.textContent = "Loaded " + f.name + " "; }
+    catch (e) { label.textContent = "That file is not a settings backup "; }
+    $("loadbackup").value = "";
+  };
+  $("filtersbtn").onclick = () => { const open = document.querySelector("header").classList.toggle("open"); $("filtersbtn").setAttribute("aria-expanded", open); };
 
   const foot = $("foot"), bad = DATA.status.filter(s => !s.ok);
   const when = DATA.generated ? new Date(DATA.generated).toLocaleString() : "unknown";
