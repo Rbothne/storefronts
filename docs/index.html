@@ -158,7 +158,7 @@
     <select id="sort" aria-label="Sort by">
       <option value="best">Top picks</option><option value="off">Discount</option>
       <option value="store_rel">Deal for its store</option><option value="brand_rel">Deal for its brand</option>
-      <option value="drop">Price change</option><option value="low">Lowest or highest so far</option>
+      <option value="drop">Price change</option>
       <option value="new">Date added</option><option value="price">Price</option><option value="store">Store</option>
     </select>
     <button class="pill" id="dir" title="Reverse the order"></button>
@@ -431,7 +431,7 @@ function filtered(items, brands) {
   const list = items.filter(i =>
     inTab(i, tab, brands) &&
     // the two price-history sorts list only items whose price actually fell while tracked
-    (sort !== "drop" || dropped(i) || rose(i)) && (sort !== "low" || (dir < 0 ? newLow(i) : newHigh(i))) &&
+    (sort !== "drop" || dropped(i) || rose(i)) &&
     (!g || i.group === g || i.group + "/" + i.kind === g || (g === "shops" && i.group !== "clothing")) && (!s || i.store === s) &&
     (i.off || 0) >= min && (!stock || i.avail === true) && (!mine || sizeOK(i)) &&
     fitsShown(i, gen) &&
@@ -473,8 +473,6 @@ const SORTS = {
   brand_rel: { key: i => rel(i, "brand"), dir: -1, words: ["Most unusual first", "Most routine first"], spread: true },
   // drop below its high counts up, rise above its low counts down: one scale from biggest drop to biggest rise
   drop: { key: i => dropShare(i) - riseShare(i), dir: -1, words: ["Biggest drop first", "Biggest rise first"] },
-  // the direction picks the list: items at their tracked low (biggest drop first) or at their high (biggest rise first)
-  low: { key: i => dir < 0 ? dropShare(i) : -riseShare(i), dir: -1, words: ["At lowest so far", "At highest so far"] },
   new: { key: i => i.first_seen || null, dir: -1, words: ["Newest first", "Oldest first"] },
   price: { key: i => i.usd ?? i.price ?? null, dir: 1, words: HIGH },   // compared in US dollars
   store: { key: i => i.store_name + "\u0001" + i.title, dir: 1, words: ["Z to A", "A to Z"] },
@@ -675,8 +673,7 @@ function render() {
 }
 function reset() { shown = PAGE; render(); }
 // What the price-history sorts list, said under the filters (prices are tracked from the day an item is first seen).
-const HISTORY_SORT = { drop: [" whose price changed while tracked", " whose price changed while tracked"],
-                       low: [" that fell to their lowest tracked price", " that rose to their highest tracked price"] };
+const HISTORY_SORT = { drop: [" whose price changed while tracked", " whose price changed while tracked"] };
 
 // ---- settings panel
 function chips(box, values, chosen) {
