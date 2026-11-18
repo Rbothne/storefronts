@@ -326,12 +326,17 @@ function storeShown(i) {
 const trackedLow = i => Math.min(...i.hist.map(h => h[1])), trackedHigh = i => Math.max(...i.hist.map(h => h[1]));
 const atLow = i => !!i.hist && i.price != null && i.price <= trackedLow(i) * 1.03;
 const dropShare = i => i.hist && i.price != null ? (trackedHigh(i) - i.price) / trackedHigh(i) : 0;   // share below its highest tracked price
+const dropped = i => dropShare(i) >= 0.03;                  // its price really fell while tracked (3%: the build's noise margin)
+const newLow = i => dropped(i) && atLow(i);                 // ... and it is still at the lowest price seen
+const changedOn = i => i.hist[i.hist.length - 1][0];        // day of its latest price change
+const highOn = i => [...i.hist].reverse().find(h => h[1] === trackedHigh(i))[0];   // latest day it was at its high
+const shortDay = d => new Date(d + "T12:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric" });
 // Best-deals score: the discount, plus signals that it is a deal for you. Tune the weights here.
 function score(i, brands) {
   let s = (i.off || 0) >= 90 ? 30 : i.off || 0;              // 90%+ off is almost always a listing error
   if (brands.has(brandKey(i.brand))) s += 25;                // a brand you follow
   if (i.sz && !i.sz.includes("OS") && wantedSizes(i.kind).length && sizeOK(i)) s += 10;   // in stock in your size
-  if (atLow(i)) s += 10;                                     // at its lowest tracked price
+  if (newLow(i)) s += 10;                                    // fell to its lowest tracked price
   if (i.first_seen && daysSince(i.first_seen) <= 3) s += 5;  // just appeared
   if ((i.usd ?? i.price ?? 99) < 15) s -= 15;                // stickers and socks
   return s;
@@ -362,8 +367,11 @@ function filtered(items, brands) {
   const q = $("q").value.trim().toLowerCase(), g = $("group").value, s = $("store").value;
   const min = +$("minoff").value, stock = $("stock").checked, mine = $("mysizes").checked, gen = $("gender").value;
   const cat = $("itemcat").value.slice(2);
+  const sort = $("sort").value;
   const list = items.filter(i =>
     inTab(i, tab, brands) &&
+    // the two price-history sorts list only items whose price actually fell while tracked
+    (sort !== "drop" || dropped(i)) && (sort !== "low" || newLow(i)) &&
     (!g || i.group === g || i.group + "/" + i.kind === g) && (!s || i.store === s) &&
     (i.off || 0) >= min && (!stock || i.avail === true) && (!mine || sizeOK(i)) &&
     (!gen || !i.g || i.g === gen) &&                         // unlabelled items count as unisex
@@ -371,20 +379,16 @@ function filtered(items, brands) {
     (!q || (i.title + " " + (i.brand || "") + " " + i.store_name).toLowerCase().includes(q)));
   const usd = i => i.usd ?? i.price;                         // compare prices in one currency
   const sc = new Map(list.map(i => [i, score(i, brands)]));
-  // "At lowest price so far": items at their tracked low first (biggest drop first), then items above
-  // their low (closest first), then items whose price has never changed.
-  const lowRank = i => atLow(i) ? [0, -dropShare(i)] : i.hist && i.price != null ? [1, i.price / trackedLow(i)] : [2, -(i.off || 0)];
-  const lr = $("sort").value === "low" ? new Map(list.map(i => [i, lowRank(i)])) : null;
   const by = {
-    drop: (a, b) => dropShare(b) - dropShare(a) || (b.off || 0) - (a.off || 0),
-    low: (a, b) => lr.get(a)[0] - lr.get(b)[0] || lr.get(a)[1] - lr.get(b)[1],
+    drop: (a, b) => dropShare(b) - dropShare(a) || (b.off || 0) - (a.off || 0),            // furthest below its high first
+    low: (a, b) => changedOn(b).localeCompare(changedOn(a)) || dropShare(b) - dropShare(a),  // newest new lows first
     best: (a, b) => sc.get(b) - sc.get(a) || (b.off || 0) - (a.off || 0),
     off: (a, b) => (b.off || 0) - (a.off || 0),
     new: (a, b) => (b.first_seen || "").localeCompare(a.first_seen || ""),
     lo: (a, b) => (usd(a) ?? 1e12) - (usd(b) ?? 1e12),
     hi: (a, b) => (usd(b) ?? -1) - (usd(a) ?? -1),
     store: (a, b) => a.store_name.localeCompare(b.store_name) || a.title.localeCompare(b.title),
-  }[$("sort").value];
+  }[sort];
   return list.sort(by);
 }
 
@@ -472,14 +476,15 @@ function spark(i) {
   svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", title.textContent);
   // Today's price as a dot: green at its tracked low, red at its tracked high, yellow in between
   // (within 3% counts as at, the margin the build uses for exchange-rate drift). The label says the same in words.
-  const level = atLow(i) ? "low" : i.price >= hi * 0.97 ? "high" : "mid";
+  const level = newLow(i) ? "low" : i.price >= hi * 0.97 ? "high" : "mid";
   path.setAttribute("d", d); dot.setAttribute("cx", W - 5); dot.setAttribute("cy", y(i.price)); dot.setAttribute("r", 3.5);
   dot.setAttribute("class", level);
   svg.append(title, path, dot);
   const row = el("div", "hist"); row.append(svg);
-  row.append(el("span", null, level === "low" ? "Lowest so far, down " + Math.round(dropShare(i) * 100) + "% from " + money(hi, i.cur)
-                             : level === "high" ? "Highest tracked; low was " + money(lo, i.cur)
-                             : "Low was " + money(lo, i.cur)));
+  const pct = Math.round(dropShare(i) * 100) + "%";
+  row.append(el("span", null, level === "low" ? "New low: " + pct + " under " + money(hi, i.cur) + " on " + shortDay(highOn(i))
+                             : level === "high" ? "Up from " + money(lo, i.cur) + " since " + shortDay(changedOn(i))
+                             : pct + " under its high of " + money(hi, i.cur) + "; low " + money(lo, i.cur)));
   return row;
 }
 
@@ -530,8 +535,9 @@ function render() {
   if (!list.length) grid.replaceChildren(el("div", "empty", tab === "brands" && !brands.size
     ? "Star an item (☆) to see everything on sale from its brand."
     : tab === "wish" && !items.some(isFollowed) ? "Nothing followed yet. Star an item (☆) or add links to wishlist.txt."
+    : HISTORY_SORT[$("sort").value] ? "No tracked price drops match these filters yet. Prices are checked twice a day, so these lists grow over time."
     : "Nothing matches these filters."));
-  let text = list.length + (list.length === 1 ? " item" : " items");
+  let text = list.length + (list.length === 1 ? " item" : " items") + (HISTORY_SORT[$("sort").value] || "");
   if (tab === "brands" && list.length)                       // name only the brands that have something to show
     text += " from brands you follow: " + [...new Set(list.map(i => brands.get(brandKey(i.brand))))].sort().join(", ");
   const quiet = tab === "wish" || $("storecat").value === "crowded" ? 0 : [...CROWD.hosts].filter(h => crowdedOut({ store: h }) && $("store").value !== h).length;
@@ -542,6 +548,9 @@ function render() {
   counts(items, brands);
 }
 function reset() { shown = PAGE; render(); }
+// What the price-history sorts list, said under the filters (prices are tracked from the day an item is first seen).
+const HISTORY_SORT = { drop: " whose price fell while tracked, biggest fall first",
+                       low: " that just fell to their lowest tracked price, newest first" };
 
 // ---- settings panel
 function chips(box, values, chosen) {

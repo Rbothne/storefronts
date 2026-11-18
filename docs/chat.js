@@ -52,7 +52,7 @@ const TOOLS = [
         min_discount: { type: "number", description: "Lowest discount in percent, for example 40." },
         in_my_sizes: { type: "boolean", description: "Only items in stock in the sizes from the profile. Items with no readable size are kept." },
         fits: { type: "string", enum: ["men", "women"], description: "Leave out women's-only or men's-only items. Unlabelled items count as unisex and are kept." },
-        sort: { type: "string", enum: ["best", "discount", "price_drop", "lowest_so_far", "price_low", "price_high", "newest"], description: "Order of results. \"best\" weighs discount, followed brands, the person's sizes and price history. \"price_drop\" puts the largest fall from an item's highest tracked price first; \"lowest_so_far\" puts items at their lowest tracked price first. Default \"best\"." },
+        sort: { type: "string", enum: ["best", "discount", "price_drop", "lowest_so_far", "price_low", "price_high", "newest"], description: "Order of results. \"best\" weighs discount, followed brands, the person's sizes and price history. \"price_drop\" lists only items whose price fell while tracked, largest fall from their highest tracked price first; \"lowest_so_far\" lists only items that fell to their lowest tracked price, most recent first. Default \"best\"." },
         limit: { type: "integer", description: "How many results to return, from 1 to 30. Default 15." },
       },
       additionalProperties: false,
@@ -112,7 +112,7 @@ function brief(i) {
   if (i.g) o.fits = { m: "men", w: "women", k: "kids" }[i.g];
   if (isFollowed(i)) o.followed = true;
   if (prefs.itemCats[i.id]) o.my_categories = prefs.itemCats[i.id];
-  if (i.hist) { o.price_history = i.hist; if (atLow(i)) o.at_lowest_tracked_price = true; }
+  if (i.hist) { o.price_history = i.hist; if (newLow(i)) o.at_lowest_tracked_price = true; }
   if (i.avail === false) o.sold_out = true;
   o.first_seen = i.first_seen; o.url = i.url;
   return o;
@@ -120,7 +120,7 @@ function brief(i) {
 function searchItems(a) {
   const words = (a.query || "").toLowerCase().split(/\s+/).filter(Boolean), has = (text, part) => !part || (text || "").toLowerCase().includes(part.toLowerCase());
   const gen = { men: "m", women: "w" }[a.fits], brands = followedBrands(pool());
-  const list = DATA.items.filter(i => {
+  let list = DATA.items.filter(i => {
     if (ruledOut(i) || crowdedOut(i)) return false;
     const text = (i.title + " " + (i.brand || "") + " " + i.store_name + " " + i.group + " " + (i.kind || "")).toLowerCase();
     return words.every(w => text.includes(w)) &&
@@ -129,11 +129,14 @@ function searchItems(a) {
       (a.max_price_usd == null || (i.usd ?? i.price ?? Infinity) <= a.max_price_usd) &&
       (i.off || 0) >= (a.min_discount || 0) && (!a.in_my_sizes || sizeOK(i)) && (!gen || !i.g || i.g === gen);
   });
+  // like the page, the price-history sorts keep only items whose price actually fell
+  if (a.sort === "price_drop") list = list.filter(dropped);
+  if (a.sort === "lowest_so_far") list = list.filter(newLow);
   const usd = i => i.usd ?? i.price ?? 0, sc = new Map(list.map(i => [i, score(i, brands)]));
   list.sort({ best: (x, y) => sc.get(y) - sc.get(x), discount: (x, y) => (y.off || 0) - (x.off || 0),
               price_low: (x, y) => usd(x) - usd(y), price_high: (x, y) => usd(y) - usd(x),
               price_drop: (x, y) => dropShare(y) - dropShare(x) || (y.off || 0) - (x.off || 0),
-              lowest_so_far: (x, y) => atLow(y) - atLow(x) || dropShare(y) - dropShare(x),
+              lowest_so_far: (x, y) => changedOn(y).localeCompare(changedOn(x)) || dropShare(y) - dropShare(x),
               newest: (x, y) => (y.first_seen || "").localeCompare(x.first_seen || "") }[a.sort || "best"]);
   const limit = Math.min(Math.max(a.limit || 15, 1), 30);
   return { site_last_updated: DATA.generated, total_matches: list.length, showing: Math.min(limit, list.length), items: list.slice(0, limit).map(brief) };
