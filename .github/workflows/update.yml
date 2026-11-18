@@ -33,11 +33,17 @@ jobs:
       - name: Decide what to run
         run: |
           python3 - >> "$GITHUB_ENV" <<'EOF'
-          import json, os
+          import json, os, subprocess
           event, e = os.environ["GITHUB_EVENT_NAME"], json.load(open(os.environ["GITHUB_EVENT_PATH"]))
           if event == "push":
-              changed = {f for c in e.get("commits", []) for k in ("added", "modified", "removed") for f in c.get(k, [])}
-              mode = "full" if changed & {"build.py", "stores.json"} else "publish"
+              # ask git which files the push changed (the checkout is shallow, so fetch the commit before it first)
+              try:
+                  subprocess.run(["git", "fetch", "-q", "--depth=1", "origin", e["before"]], check=True)
+                  changed = set(subprocess.run(["git", "diff", "--name-only", e["before"], "HEAD"], check=True,
+                                               capture_output=True, text=True).stdout.split())
+              except Exception:
+                  changed = {"build.py"}             # can't tell: refresh everything to be safe
+              mode = "full" if changed & {"build.py", "stores.json", ".github/workflows/update.yml"} else "publish"
           elif event == "schedule" and e.get("schedule") == "37 * * * *":
               mode = "hourly"
           else:
