@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# Built by the workflow and kept on the "data" branch (one commit, replaced on every update)
+data/state.json
+docs/data.json

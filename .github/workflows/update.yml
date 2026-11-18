@@ -4,32 +4,77 @@ on:
   schedule:
     - cron: "17 11,23 * * *"   # twice a day (UTC): about 6:17 am and 6:17 pm Eastern
   workflow_dispatch:            # lets you press "Run workflow" by hand
+  push:                         # a change to the page itself: republish it with the latest data, no rebuild
+    branches: [main]
+    paths: ["docs/**", ".github/workflows/update.yml"]
 
 permissions:
-  contents: write
+  contents: write               # to replace the data branch
+  pages: write                  # to publish the site
+  id-token: write               # required by the Pages deploy action
 
-concurrency:
+concurrency:                    # one run at a time, so two never race on the data branch
   group: update-listings
   cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      REBUILD: ${{ github.event_name != 'push' }}
     steps:
       - uses: actions/checkout@v4
 
+      # The price history and the latest listings live on the "data" branch, which always holds a single commit:
+      # every update replaces it, so the repository does not grow by tens of megabytes a day.
+      - name: Get the latest data
+        run: |
+          mkdir -p data
+          git fetch --depth=1 origin data
+          git show FETCH_HEAD:state.json > data/state.json
+          git show FETCH_HEAD:data.json > docs/data.json
+          cp data/state.json "$RUNNER_TEMP/state.before.json"
+
       - name: Fetch stores and build data
+        if: env.REBUILD == 'true'
         run: python3 build.py
 
-      - name: Commit updated data
+      # A run that reads stores badly (a network problem, say) could find far fewer items. Saving its result would
+      # lose good price history, so stop instead; the site keeps the previous data until the next run.
+      - name: Check the new data before saving it
+        if: env.REBUILD == 'true'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs data
-          git diff --cached --quiet || git commit -m "Update listings"
-          # The build takes a while; pick up anything pushed meanwhile so the push is not rejected.
-          # If data was pushed meanwhile too (a build run by hand), this run's fresh data wins
-          # (during a rebase, "theirs" is the commit being replayed: ours).
-          git pull --rebase -X theirs
-          git push
+          python3 - "$RUNNER_TEMP/state.before.json" data/state.json <<'EOF'
+          import json, sys
+          before, after = (len(json.load(open(p, encoding="utf-8"))["prices"]) for p in sys.argv[1:3])
+          print(f"price history: {before} items before, {after} after")
+          if after < 0.8 * before:
+              sys.exit(f"The new price history has {after} items, under 80% of the {before} before. Not saving it.")
+          EOF
+
+      # Replace the data branch with one fresh commit holding the two files (plumbing commands, so the
+      # checked-out page files are left alone for the publish step).
+      - name: Save the data
+        if: env.REBUILD == 'true'
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          state=$(git hash-object -w data/state.json)
+          listings=$(git hash-object -w docs/data.json)
+          tree=$(printf "100644 blob %s\tdata.json\n100644 blob %s\tstate.json\n" "$listings" "$state" | git mktree)
+          commit=$(git commit-tree "$tree" -m "Listings and price history, $(date -u +%Y-%m-%dT%H:%MZ)")
+          git push --force origin "$commit:refs/heads/data"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
