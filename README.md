@@ -10,10 +10,10 @@ A personal page that pulls sale items and wishlist prices from many shops.
 
 On the page:
 
-- **Followed** shows everything in `wishlist.txt` plus items you star (☆). Stars are saved in the browser; **Brands** shows everything else on sale from the brands of your followed items.
-- **My sizes** hides items not in stock in the sizes picked under "Sizes & stores". `build.py` converts each store's labels (LG, 50 (Large), Japanese 3, EU 43, 27.5 cm…) to letter sizes, waist inches and US men's shoe sizes; the tables are at the top of its "sizes" section.
+- **Tabs**: **Followed** shows items you star (☆); stars are saved in the browser, and a starred item stays there with its last known details after it stops being listed. **From my brands** shows everything else from the brands of your followed items. **Everything** is the full listing. Filters include men's / women's / kids, and **In stock** (Followed tab only, since everything else listed is in stock).
+- **My sizes** hides items not in stock in the sizes picked under "Settings". `build.py` converts each store's labels (LG, 50 (Large), Japanese 3, EU 43, 27.5 cm…) to letter sizes, waist inches and US men's shoe sizes; the tables are at the top of its "sizes" section.
 - **Your own categories**: ⋯ on any card puts the item, or its store, into categories you name yourself ("shirts", "blue", "gift shops"…). The two "my categories" menus in the filter bar then filter by them. The same menu marks a store or brand "not interested", which hides it everywhere except the "Hidden: not interested" view.
-- **High-volume stores**: a switch in "Sizes & categories" hides stores that list far more items than the rest. A store is flagged when its count of qualifying items (before the cap below) is above Q3 + 1.5 × (Q3 − Q1) of items-per-store, the box-plot rule for outliers. Stores you put in a category are never hidden.
+- **High-volume stores**: a switch in "Settings" hides stores that list far more items than the rest. A store is flagged when its count of qualifying items (before the cap below) is above Q3 + 1.5 × (Q3 − Q1) of items-per-store, the box-plot rule for outliers. Stores you put in a category are never hidden.
 - **Men's / women's** uses the labels stores put in titles, product types and tags; unlabelled items count as unisex.
 - **Top picks** (the default sort) ranks by discount plus bonuses for followed brands, your size, a lowest-tracked price and new arrivals (weights in `score()` in `docs/index.html`). The discount counts half for its size and half for how unusual it is at its store.
 - **Deal for its store / brand**: stores have habits (one marks everything 70% off, another rarely passes 20%), so these sorts rank a markdown by how it compares with the other markdowns at the same store, or of the same brand across all stores: its mid-rank percentile among them (discounts within 2 points count as ties, which count half), pulled toward 50% when there are few of them (`SHRINK`). Hover a discount badge to see the store's and brand's typical markdown.
@@ -28,4 +28,4 @@ Run locally:
     py build.py
     py -m http.server 8000 -d docs     # then open http://localhost:8000
 
-Settings in `stores.json`: `min_discount` (percent off needed to appear in the sale tab), `max_pages` (250 products per page, per store), `max_items_per_store` (optional cap, keeps each store's deepest discounts; unset means no cap), `workers` (stores fetched at the same time), `delay_seconds` (pause between requests to one store).
+Settings in `stores.json`: `min_discount` (percent off needed to be listed), `max_pages` (250 products per page, per store), `max_items_per_store` (optional cap, keeps each store's deepest discounts; unset means no cap), `workers` (stores fetched at the same time), `delay_seconds` (pause between requests to one store).

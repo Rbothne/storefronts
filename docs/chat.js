@@ -21,7 +21,7 @@ const chatModel = () => MODELS.find(m => m[0] === store.get(CHAT_MODEL)) || MODE
 let sdkPromise;
 const loadSdk = () => sdkPromise ??= import("./vendor/anthropic-sdk.js").then(m => m.default);
 
-const SYSTEM = `You are the shopping assistant built into a personal deal-tracking site. The site scans about sixty independent shops (mostly menswear, plus coffee, tea, stationery, records and home goods) twice a day and lists what is in stock at 20% or more off. The person you are talking to owns the site and uses it to decide what to buy.
+const SYSTEM = `You are the shopping assistant built into a personal deal-tracking site. The site scans a few hundred shops and brands (almost all clothing, men's and women's, plus some coffee, tea, stationery, records and home goods) twice a day and lists what is in stock at 20% or more off, plus the full range of a few stores. The profile below gives today's numbers. The person you are talking to owns the site and uses it to decide what to buy.
 
 How to help
 - Work from the site first. Before recommending anything, look through the site's items with search_site_items: that data has current prices, discounts, the sizes in stock and, where known, price history. Go to the web only when the site has nothing suitable, when the person gives you a link, or when they ask for reviews or details the site does not hold, and only if web tools are available in this conversation. If they are not and the question needs them, say that the Web switch at the top of the chat turns them on.
@@ -51,7 +51,7 @@ const TOOLS = [
         max_price_usd: { type: "number", description: "Highest price in US dollars." },
         min_discount: { type: "number", description: "Lowest discount in percent, for example 40." },
         in_my_sizes: { type: "boolean", description: "Only items in stock in the sizes from the profile. Items with no readable size are kept." },
-        fits: { type: "string", enum: ["men", "women"], description: "Leave out women's-only or men's-only items. Unlabelled items count as unisex and are kept." },
+        fits: { type: "string", enum: ["men", "women", "kids"], description: "\"men\" or \"women\" leaves out the other's items (unlabelled items count as unisex and are kept); \"kids\" shows only kids' items. Left out, kids' items are excluded." },
         sort: { type: "string", enum: ["best", "discount", "deal_for_store", "deal_for_brand", "price_drop", "price_rise", "lowest_so_far", "highest_so_far", "price_low", "price_high", "newest"], description: "Order of results. \"best\" weighs discount (half its size, half how unusual it is at that store), followed brands, the person's sizes and price history. \"deal_for_store\" and \"deal_for_brand\" put first the markdowns most unusual for their store, or for their brand across all stores (some stores mark everything 70% off, so a raw percentage can mislead). \"price_drop\" lists only items whose price fell while tracked, largest fall from their highest tracked price first; \"lowest_so_far\" lists only items that fell to their lowest tracked price, biggest drop first. \"price_rise\" and \"highest_so_far\" are the mirror images (items whose price went up), for spotting bad deals and inflated prices. Default \"best\"." },
         limit: { type: "integer", description: "How many results to return, from 1 to 30. Default 15." },
       },
@@ -126,7 +126,7 @@ function brief(i) {
 }
 function searchItems(a) {
   const words = (a.query || "").toLowerCase().split(/\s+/).filter(Boolean), has = (text, part) => !part || (text || "").toLowerCase().includes(part.toLowerCase());
-  const gen = { men: "m", women: "w" }[a.fits], brands = followedBrands(pool());
+  const gen = { men: "m", women: "w", kids: "k" }[a.fits] || "", brands = followedBrands(pool());
   let list = DATA.items.filter(i => {
     if (ruledOut(i) || crowdedOut(i)) return false;
     const text = (i.title + " " + (i.brand || "") + " " + i.store_name + " " + i.group + " " + (i.kind || "")).toLowerCase();
@@ -134,7 +134,7 @@ function searchItems(a) {
       (!a.category || i.group === a.category || i.group + "/" + i.kind === a.category) &&
       has(i.store_name, a.store) && has(i.brand, a.brand) &&
       (a.max_price_usd == null || (i.usd ?? i.price ?? Infinity) <= a.max_price_usd) &&
-      (i.off || 0) >= (a.min_discount || 0) && (!a.in_my_sizes || sizeOK(i)) && (!gen || !i.g || i.g === gen);
+      (i.off || 0) >= (a.min_discount || 0) && (!a.in_my_sizes || sizeOK(i)) && fitsShown(i, gen);
   });
   // like the page, the price-history sorts keep only items whose price actually fell
   if (a.sort === "price_drop") list = list.filter(dropped);
@@ -176,8 +176,11 @@ function profileText() {
   const cats = map => namesIn(map).map(n => n + " (" + Object.values(map).filter(l => l.includes(n)).length + ")");
   return [
     "Profile, from the site's settings in this browser at the start of this chat.",
+    "The site right now: " + DATA.items.length + " items from " + new Set(DATA.items.map(i => i.store)).size + " stores; " +
+      ["w", "m", "k"].map(g => DATA.items.filter(i => i.g === g).length + " " + { w: "women's", m: "men's", k: "kids'" }[g]).join(", ") +
+      ", the rest unisex or unlabelled. Updated " + DATA.generated + ".",
     "Sizes they buy. Tops and outerwear: " + list(s.tops) + ". Bottoms: " + list(s.bottoms) + ". Shoes, US men's: " + list(s.shoes) + ".",
-    "Shows: " + ({ m: "men's and unisex items", w: "women's and unisex items" }[prefs.gender] || "men's and women's items") + ".",
+    "Shows: " + ({ m: "men's and unisex items", w: "women's and unisex items", k: "kids' items" }[prefs.gender] || "men's and women's items (no kids')") + ".",
     "Followed items (" + followed.length + "): " + (followed.slice(0, 40).map(i => i.title + " at " + i.store_name + (i.price != null ? " (" + i.cur + " " + i.price + ")" : "")).join("; ") || "none") + ".",
     "Brands they follow: " + ([...followedBrands(items).values()].sort().join(", ") || "none") + ".",
     "Their item categories: " + (cats(prefs.itemCats).join(", ") || "none") + ". Their store categories: " + (cats(prefs.storeCats).join(", ") || "none") + ".",

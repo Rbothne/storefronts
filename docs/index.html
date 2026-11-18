@@ -69,7 +69,7 @@
   .meta { color: var(--muted); font-size: 12px; }
   #more { display: block; margin: 18px auto 0; padding: 9px 18px; border-radius: 8px;
           border: 1px solid var(--line); background: var(--card); }
-  #more[hidden] { display: none; }  /* display:block above would otherwise override the hidden attribute */
+  #more[hidden], .filters [hidden] { display: none; }  /* display:block above would otherwise override the hidden attribute */
   footer { color: var(--muted); font-size: 12px; padding: 0 14px 30px; }
   footer details { margin-top: 6px; }
   footer li.bad { color: var(--sale); }
@@ -135,7 +135,7 @@
     <select id="storecat" aria-label="My store categories"></select>
     <select id="gender" aria-label="Men's or women's">
       <option value="">Men's and women's</option><option value="m">Men's and unisex</option>
-      <option value="w">Women's and unisex</option>
+      <option value="w">Women's and unisex</option><option value="k">Kids</option>
     </select>
     <select id="minoff" aria-label="Minimum discount">
       <option value="0">Any discount</option><option value="20">20%+ off</option>
@@ -151,7 +151,7 @@
     <button class="pill" id="dir" title="Reverse the order"></button>
     <label><input type="checkbox" id="stock"> In stock</label>
     <label><input type="checkbox" id="mysizes"> My sizes</label>
-    <button class="pill" id="opensettings">Sizes &amp; categories</button>
+    <button class="pill" id="opensettings">Settings</button>
     <button class="pill" id="openchat">Ask the assistant</button>
   </div>
 </header>
@@ -212,8 +212,8 @@
   <label class="check"><input type="checkbox" id="calm"> Hide stores that list far more items than the rest</label>
   <p id="calminfo"></p>
 
-  <h2>Not interested</h2>
-  <p>Stores and brands you hid with ⋯ on a card. Click one to bring it back.</p>
+  <h2>Hidden</h2>
+  <p>Stores and brands you hid with ⋯ on a card. Click one to show it again.</p>
   <div class="row"><span>Stores</span><div class="chips" id="hiddenlist"></div></div>
   <div class="row"><span>Brands</span><div class="chips" id="mutedlist"></div></div>
 
@@ -222,8 +222,8 @@
   <div class="chips" id="noteslist"></div>
 
   <h2>Followed items</h2>
-  <p>Stars are saved in this browser and only tracked while the item is on sale. To track one permanently
-     and on every device, add its link to <code>wishlist.txt</code>.</p>
+  <p>Stars are saved in this browser. A starred item stays on the Followed tab after it stops being listed,
+     with its last known details.</p>
   <button class="pill" id="copylinks">Copy links of starred items</button>
 
   <h2>Backup</h2>
@@ -239,7 +239,7 @@
 </dialog>
 
 <script>
-const TABS = [["wish", "Followed"], ["brands", "Brands"], ["sale", "On sale"], ["all", "Everything"]];
+const TABS = [["wish", "Followed"], ["brands", "From my brands"], ["all", "Everything"]];
 const LETTERS = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"];
 // Fallback grouping between waist inches and letter sizes, used when you picked only one of the two.
 const WAIST = { XS: [26, 27, 28], S: [29, 30], M: [31, 32, 33], L: [34, 35, 36], XL: [37, 38, 39, 40], XXL: [41, 42, 43] };
@@ -249,7 +249,7 @@ let DATA = { items: [], status: [] }, IDS = new Set(), tab = "wish", shown = PAG
 //   follows    starred items (a copy of each, so it still shows after leaving the sale data)
 //   itemCats   your categories per item id; kept holds the copy of each categorised item
 //   storeCats  your categories per store host
-//   hidden     stores you are not interested in;  muted  brands you are not interested in
+//   hidden     stores you hid;  muted  brands you hid
 //   notes      preferences the shopping assistant saved (the API key is stored separately, never in here)
 //   calm       true to hide high-volume stores (see crowd() below)
 let prefs;
@@ -280,8 +280,7 @@ function thumb(src) {
 function daysSince(d) { return Math.floor((Date.now() - new Date(d + "T00:00:00Z")) / 864e5); }
 
 // ---- follows, brands, your categories, sizes
-const inFile = i => i.tags.includes("wish");                 // listed in wishlist.txt
-const isFollowed = i => inFile(i) || i.id in prefs.follows;
+const isFollowed = i => i.id in prefs.follows;
 const brandKey = b => (b || "").toLowerCase().replace(/\b(wo)?mens\b/g, "").replace(/[^a-z0-9]/g, "");
 // Everything in the latest data, plus starred or categorised items that have since dropped out of it.
 const pool = () => [...DATA.items, ...Object.values({ ...prefs.kept, ...prefs.follows }).filter(f => !IDS.has(f.id)).map(f => ({ ...f, tags: [], gone: true }))];
@@ -381,6 +380,8 @@ function score(i, brands) {
   if ((i.usd ?? i.price ?? 99) < 15) s -= 15;                // stickers and socks
   return s;
 }
+// Men's and women's leaves out kids' items; men's or women's also keeps unlabelled items (they count as unisex).
+const fitsShown = (i, gen) => gen === "k" ? i.g === "k" : gen ? !i.g || i.g === gen : i.g !== "k";
 function inTab(i, key, brands) {
   if (key === "wish") return isFollowed(i);                  // followed items ignore hidden stores
   if (i.gone) return key === "all" && i.id in prefs.itemCats;   // categorised, but no longer on sale
@@ -405,16 +406,17 @@ function sizeOK(i) {
 
 function filtered(items, brands) {
   const q = $("q").value.trim().toLowerCase(), g = $("group").value, s = $("store").value;
-  const min = +$("minoff").value, stock = $("stock").checked, mine = $("mysizes").checked, gen = $("gender").value;
+  // Everything listed is in stock, so "In stock" only means something on the Followed tab
+  const min = +$("minoff").value, stock = tab === "wish" && $("stock").checked, mine = $("mysizes").checked, gen = $("gender").value;
   const cat = $("itemcat").value.slice(2);
   const sort = $("sort").value;
   const list = items.filter(i =>
     inTab(i, tab, brands) &&
     // the two price-history sorts list only items whose price actually fell while tracked
     (sort !== "drop" || dropped(i) || rose(i)) && (sort !== "low" || (dir < 0 ? newLow(i) : newHigh(i))) &&
-    (!g || i.group === g || i.group + "/" + i.kind === g) && (!s || i.store === s) &&
+    (!g || i.group === g || i.group + "/" + i.kind === g || (g === "shops" && i.group !== "clothing")) && (!s || i.store === s) &&
     (i.off || 0) >= min && (!stock || i.avail === true) && (!mine || sizeOK(i)) &&
-    (!gen || !i.g || i.g === gen) &&                         // unlabelled items count as unisex
+    fitsShown(i, gen) &&
     (!cat || (prefs.itemCats[i.id] || []).includes(cat)) &&
     (!q || (i.title + " " + (i.brand || "") + " " + i.store_name).toLowerCase().includes(q)));
   const key = SORTS[sort].key, keys = new Map(list.map(i => [i, key(i, brands)]));
@@ -448,9 +450,9 @@ function showDir() { $("dir").textContent = (dir < 0 ? "↓ " : "↑ ") + SORTS[
 function star(i) {
   const b = el("button", "star"), set = () => {
     b.textContent = isFollowed(i) ? "★" : "☆"; b.setAttribute("aria-pressed", isFollowed(i));
-    b.title = inFile(i) ? "Followed in wishlist.txt" : isFollowed(i) ? "Stop following" : "Follow this item";
+    b.title = isFollowed(i) ? "Stop following" : "Follow this item";
   };
-  b.disabled = inFile(i); b.setAttribute("aria-label", "Follow"); set();
+  b.setAttribute("aria-label", "Follow"); set();
   b.onclick = () => {
     if (i.id in prefs.follows) delete prefs.follows[i.id];
     else { const { tags, gone, ...copy } = i; prefs.follows[i.id] = copy; }
@@ -485,13 +487,13 @@ function catPicker(map, key, after) {
   draw();
   return box;
 }
-// A toggle chip for "not interested".
+// A toggle chip for hiding a store or brand.
 function hideChip(label, map, key, value) {
   const b = el("button", null, label); b.setAttribute("aria-pressed", key in map);
   b.onclick = () => { key in map ? delete map[key] : map[key] = value; savePrefs(); b.setAttribute("aria-pressed", key in map); };
   return b;
 }
-// The ⋯ menu on a card: categories for this item and for its store, and "not interested".
+// The ⋯ menu on a card: categories for this item and for its store, and hiding.
 function organize(i) {
   const keep = () => {                                       // categorised items keep a copy, like starred ones
     if (i.id in prefs.itemCats) { const { tags, gone, ...copy } = i; prefs.kept[i.id] = copy; } else delete prefs.kept[i.id];
@@ -504,7 +506,7 @@ function organize(i) {
     el("h2", null, i.title),
     el("h3", null, "This item is in"), catPicker(prefs.itemCats, i.id, keep),
     el("h3", null, "The store " + i.store_name + " is in"), catPicker(prefs.storeCats, i.store, savePrefs),
-    el("h3", null, "Not interested"), hide);
+    el("h3", null, "Hide"), hide);
   $("organize").showModal();
 }
 function orgButton(i) {
@@ -565,7 +567,7 @@ function card(i) {
   if (i.hist && i.price != null) b.append(spark(i));
   const notes = [];
   if (prefs.itemCats[i.id]) notes.push("In: " + prefs.itemCats[i.id].join(", "));
-  if (i.gone) notes.push("No longer in the sale data; add its link to wishlist.txt to keep tracking it");
+  if (i.gone) notes.push("No longer listed; showing its last known details");
   if (i.tracked_drop) notes.push("Down from highest price tracked");
   const by = { store_rel: "store", brand_rel: "brand" }[$("sort").value], st = by && standing(i, by);
   if (st) notes.push("Beats " + Math.round(st.beats * 100) + "% of " + (by === "store" ? i.store_name : i.brand) +
@@ -590,7 +592,7 @@ function render() {
   grid.replaceChildren(...list.slice(0, shown).map(card));
   if (!list.length) grid.replaceChildren(el("div", "empty", tab === "brands" && !brands.size
     ? "Star an item (☆) to see everything on sale from its brand."
-    : tab === "wish" && !items.some(isFollowed) ? "Nothing followed yet. Star an item (☆) or add links to wishlist.txt."
+    : tab === "wish" && !items.some(isFollowed) ? "Nothing followed yet. Star an item (☆) to keep track of it."
     : HISTORY_SORT[$("sort").value] ? "No tracked price changes match these filters yet. Prices are checked twice a day, so these lists grow over time."
     : "Nothing matches these filters."));
   const hs = HISTORY_SORT[$("sort").value];
@@ -603,6 +605,7 @@ function render() {
   $("more").hidden = list.length <= shown;
   $("more").textContent = "Show more (" + (list.length - shown) + " left)";
   counts(items, brands);
+  $("stock").parentNode.hidden = tab !== "wish";
 }
 function reset() { shown = PAGE; render(); }
 // What the price-history sorts list, said under the filters (prices are tracked from the day an item is first seen).
@@ -676,8 +679,12 @@ function fillCatMenus() {
   };
   fill("itemcat", "My item categories: any", namesIn(prefs.itemCats), []);
   fill("storecat", "My store categories: any", namesIn(prefs.storeCats),
-       [new Option("Stores with no category", "none"), new Option("Hidden: not interested", "hidden"),
+       [new Option("Stores with no category", "none"), new Option("Hidden stores and brands", "hidden"),
         ...(CROWD.hosts.size ? [new Option("High-volume stores only", "crowded")] : [])]);
+  // Each menu shows once it has something to offer (the store menu also holds the view of what you hid).
+  const hid = Object.keys(prefs.hidden).length + Object.keys(prefs.muted).length;
+  $("itemcat").hidden = !namesIn(prefs.itemCats).length;
+  $("storecat").hidden = !namesIn(prefs.storeCats).length && !hid;
 }
 
 function setup() {
@@ -692,13 +699,14 @@ function setup() {
   // Category menu: each group, with clothing split into its kinds (value "clothing/tops").
   const LABELS = { home: "Home & stationery", skate: "Skateboarding", other: "Other" };
   const label = k => LABELS[k] || k[0].toUpperCase() + k.slice(1);
+  // Two headed groups: clothing with its kinds, then every other kind of shop ("shops" = all but clothing).
   const opts = [new Option("All categories", "")];
-  for (const g of [...new Set(DATA.items.map(i => i.group))].sort()) {
-    const kinds = [...new Set(DATA.items.filter(i => i.group === g && i.kind).map(i => i.kind))]
-      .sort((a, b) => (a === "other") - (b === "other") || a.localeCompare(b));
-    opts.push(new Option(label(g) + (kinds.length ? " (all)" : ""), g));
-    for (const k of kinds) opts.push(new Option("   " + (k === "other" ? "Other " + g : label(k)), g + "/" + k));
-  }
+  const kinds = [...new Set(DATA.items.filter(i => i.group === "clothing" && i.kind).map(i => i.kind))]
+    .sort((a, b) => (a === "other") - (b === "other") || a.localeCompare(b));
+  opts.push(new Option("Clothing (all)", "clothing"));
+  for (const k of kinds) opts.push(new Option("   " + (k === "other" ? "Other clothing" : label(k)), "clothing/" + k));
+  const shops = [...new Set(DATA.items.map(i => i.group))].filter(g => g !== "clothing").sort();
+  if (shops.length) opts.push(new Option("Other shops (all)", "shops"), ...shops.map(g => new Option("   " + label(g), g)));
   $("group").append(...opts);
   const stores = [...new Map(DATA.items.map(i => [i.store, i.store_name])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
   $("store").append(new Option("All stores", ""), ...stores.map(([h, n]) => new Option(n, h)));
@@ -728,14 +736,14 @@ function setup() {
 
   const foot = $("foot"), bad = DATA.status.filter(s => !s.ok);
   const when = DATA.generated ? new Date(DATA.generated).toLocaleString() : "unknown";
-  foot.append(el("div", null, "Updated " + when + ". Sale tab shows items at least " + (DATA.min_discount || 0) +
-    "% off the store's listed original price. Prices are in each store's own currency; ≈ values are US dollars at today's rate."));
+  foot.append(el("div", null, "Updated " + when + ". Lists items at least " + (DATA.min_discount || 0) +
+    "% off the store's listed original price, plus the full range of a few stores. Prices are in each store's own currency; ≈ values are US dollars at today's rate."));
   const d = el("details"); d.append(el("summary", null, "Store status: " + (DATA.status.length - bad.length) + " ok, " + bad.length + " with errors"));
   const ul = el("ul");
   for (const s of [...bad, ...DATA.status.filter(s => s.ok)])
     ul.append(el("li", s.ok ? null : "bad", s.name + ": " + s.count + " items" + (s.ok ? "" : " — " + s.errors.join("; "))));
   d.append(ul); foot.append(d);
-  if (!pool().some(isFollowed)) tab = "sale";                // nothing followed yet: open on the sale tab
+  if (!pool().some(isFollowed)) tab = "all";                 // nothing followed yet: open on everything
   render();
 }
 
@@ -743,7 +751,7 @@ fetch("data.json", { cache: "no-store" })
   .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
   .then(d => { DATA = d; setup(); })
   .catch(() => { $("grid").replaceChildren(el("div", "empty",
-    "No data yet. Run the “Update listings” workflow once from the Actions tab.")); });
+    "The listings could not be loaded. Try again in a minute.")); });
 </script>
 <script src="chat.js"></script>
 </body>
