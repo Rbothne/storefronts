@@ -25,12 +25,17 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
 TODAY = datetime.date.today().isoformat()
 DELAY = 1.0
+RETRY_PAUSE = 120     # seconds to wait before the second pass over rate-limited stores
 
 
 # ---------------------------------------------------------------- fetching
 
-def get(url, timeout=25, tries=2):
-    """Return (status, text). Never raises."""
+def get(url, timeout=25, tries=3):
+    """Return (status, text). Never raises.
+
+    A 429 (too many requests) or a server error is retried after a wait: the server's Retry-After when it
+    gives one (capped at a minute), otherwise 15 s and then 45 s.
+    """
     for attempt in range(tries):
         req = urllib.request.Request(url, headers={
             "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9",
@@ -44,7 +49,12 @@ def get(url, timeout=25, tries=2):
         except urllib.error.HTTPError as e:
             status = e.code
             if status in (429, 500, 502, 503, 504) and attempt + 1 < tries:
-                time.sleep(15)
+                wait = (15, 45)[min(attempt, 1)]
+                try:
+                    wait = min(60, max(wait, int(e.headers.get("Retry-After", ""))))
+                except ValueError:
+                    pass
+                time.sleep(wait)
                 continue
             time.sleep(DELAY)
             return status, ""
@@ -640,6 +650,19 @@ def main():
 
     with concurrent.futures.ThreadPoolExecutor(settings.get("workers", 6)) as pool:
         results = list(pool.map(fetch_store, list(stores)))
+
+    # Shopify sometimes rate-limits a whole run (HTTP 429 from nearly every store), apparently by the shared
+    # address of the machine running it. Give those stores one more, slower pass after a pause, rather than
+    # falling back to their items from the last run.
+    hosts = list(stores)
+    limited = [n for n, (_, errors, _) in enumerate(results) if any("429" in e for e in errors)]
+    if limited:
+        print(f"{len(limited)} stores were rate-limited (HTTP 429); trying them again in {RETRY_PAUSE} s, more slowly", flush=True)
+        time.sleep(RETRY_PAUSE)
+        with concurrent.futures.ThreadPoolExecutor(3) as pool:
+            for n, again in zip(limited, pool.map(fetch_store, [hosts[n] for n in limited])):
+                results[n] = again
+        print(f"after the second pass, {sum(any('429' in e for e in results[n][1]) for n in limited)} still rate-limited", flush=True)
 
     for (host, store), (found, errors, qualified) in zip(stores.items(), results):
         name, before = store.get("name", host), len(items)
