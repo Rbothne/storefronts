@@ -52,7 +52,7 @@ const TOOLS = [
         min_discount: { type: "number", description: "Lowest discount in percent, for example 40." },
         in_my_sizes: { type: "boolean", description: "Only items in stock in the sizes from the profile. Items with no readable size are kept." },
         fits: { type: "string", enum: ["men", "women"], description: "Leave out women's-only or men's-only items. Unlabelled items count as unisex and are kept." },
-        sort: { type: "string", enum: ["best", "discount", "price_drop", "lowest_so_far", "price_low", "price_high", "newest"], description: "Order of results. \"best\" weighs discount, followed brands, the person's sizes and price history. \"price_drop\" lists only items whose price fell while tracked, largest fall from their highest tracked price first; \"lowest_so_far\" lists only items that fell to their lowest tracked price, most recent first. Default \"best\"." },
+        sort: { type: "string", enum: ["best", "discount", "deal_for_store", "deal_for_brand", "price_drop", "lowest_so_far", "price_low", "price_high", "newest"], description: "Order of results. \"best\" weighs discount (half its size, half how unusual it is at that store), followed brands, the person's sizes and price history. \"deal_for_store\" and \"deal_for_brand\" put first the markdowns most unusual for their store, or for their brand across all stores (some stores mark everything 70% off, so a raw percentage can mislead). \"price_drop\" lists only items whose price fell while tracked, largest fall from their highest tracked price first; \"lowest_so_far\" lists only items that fell to their lowest tracked price, most recent first. Default \"best\"." },
         limit: { type: "integer", description: "How many results to return, from 1 to 30. Default 15." },
       },
       additionalProperties: false,
@@ -106,7 +106,14 @@ function brief(i) {
   const o = { id: i.id, title: i.title, brand: i.brand || undefined, store: i.store_name,
               category: i.group + (i.kind ? "/" + i.kind : ""), price: i.price, currency: i.cur };
   if (i.cur !== "USD" && i.usd != null) o.usd = i.usd;
-  if (i.off) { o.was = i.was; o.percent_off = i.off; }
+  if (i.off) {
+    o.was = i.was; o.percent_off = i.off;
+    // the discount in context: the store's (and the brand's) usual markdown, and the share of them this one beats
+    for (const kind of ["store", "brand"]) {
+      const st = standing(i, kind);
+      if (st && st.n > 1) o[kind + "_markdowns"] = { typical_percent_off: st.median, this_beats_percent: Math.round(st.beats * 100), count: st.n };
+    }
+  }
   if (i.sizes && i.sizes.length) o.sizes_in_stock = i.sizes;
   if (i.sz) { o.normalised_sizes = i.sz; if (wantedSizes(i.kind).length) o.in_my_size = sizeOK(i); }
   if (i.g) o.fits = { m: "men", w: "women", k: "kids" }[i.g];
@@ -135,6 +142,8 @@ function searchItems(a) {
   const usd = i => i.usd ?? i.price ?? 0, sc = new Map(list.map(i => [i, score(i, brands)]));
   list.sort({ best: (x, y) => sc.get(y) - sc.get(x), discount: (x, y) => (y.off || 0) - (x.off || 0),
               price_low: (x, y) => usd(x) - usd(y), price_high: (x, y) => usd(y) - usd(x),
+              deal_for_store: (x, y) => (rel(y, "store") ?? -1) - (rel(x, "store") ?? -1) || (y.off || 0) - (x.off || 0),
+              deal_for_brand: (x, y) => (rel(y, "brand") ?? -1) - (rel(x, "brand") ?? -1) || (y.off || 0) - (x.off || 0),
               price_drop: (x, y) => dropShare(y) - dropShare(x) || (y.off || 0) - (x.off || 0),
               lowest_so_far: (x, y) => changedOn(y).localeCompare(changedOn(x)) || dropShare(y) - dropShare(x),
               newest: (x, y) => (y.first_seen || "").localeCompare(x.first_seen || "") }[a.sort || "best"]);

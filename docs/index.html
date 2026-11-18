@@ -142,12 +142,13 @@
       <option value="30">30%+ off</option><option value="40">40%+ off</option>
       <option value="50">50%+ off</option><option value="60">60%+ off</option>
     </select>
-    <select id="sort" aria-label="Sort">
-      <option value="best">Best deals</option><option value="off">Biggest discount</option>
-      <option value="drop">Biggest price drop</option><option value="low">At lowest price so far</option><option value="new">Newest</option>
-      <option value="lo">Price: low to high</option><option value="hi">Price: high to low</option>
-      <option value="store">Store</option>
+    <select id="sort" aria-label="Sort by">
+      <option value="best">Best deals</option><option value="off">Discount</option>
+      <option value="store_rel">Deal for its store</option><option value="brand_rel">Deal for its brand</option>
+      <option value="drop">Price drop</option><option value="low">At lowest price so far</option>
+      <option value="new">Date added</option><option value="price">Price</option><option value="store">Store</option>
     </select>
+    <button class="pill" id="dir" title="Reverse the order"></button>
     <label><input type="checkbox" id="stock"> In stock</label>
     <label><input type="checkbox" id="mysizes"> My sizes</label>
     <button class="pill" id="opensettings">Sizes &amp; categories</button>
@@ -310,6 +311,39 @@ function crowd() {
   const fence = c.length < 8 ? Infinity : q(.75) + 1.5 * (q(.75) - q(.25));   // too few stores to call any an outlier
   return { fence, hosts: new Set(Object.keys(count).filter(h => count[h] > fence)), count };
 }
+// How unusual a markdown is where it sits. Stores have habits: one marks everything 70% off, another rarely
+// goes past 20%, so the same 45% can be routine or rare. For each store, and each brand across all stores, keep
+// the sorted discounts of its markdowns; an item's standing is its mid-rank percentile among them (ties count
+// half, so a store where everything is 70% off puts every item at 50%). Discounts within TIE points of each other
+// are ties: 71% against a store full of 70% is rounding, not a better deal. With few markdowns that figure is noise,
+// so it is pulled toward 50% as if SHRINK more markdowns sat at the middle: 3 items can't make an outlier.
+const SHRINK = 10, TIE = 2;
+let REL = { store: new Map(), brand: new Map() };
+function relStats() {
+  const r = { store: new Map(), brand: new Map() }, add = (m, k, v) => k && (m.get(k) || m.set(k, []).get(k)).push(v);
+  for (const i of DATA.items) if (i.off > 0) { add(r.store, i.store, i.off); add(r.brand, brandKey(i.brand), i.off); }
+  for (const m of Object.values(r)) for (const a of m.values()) a.sort((x, y) => x - y);
+  return r;
+}
+const countBelow = (a, x, orEqual) => { let lo = 0, hi = a.length;     // binary search in a sorted array
+  while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] < x || (orEqual && a[m] === x)) lo = m + 1; else hi = m; } return lo; };
+// { n, median, beats: raw share it beats, score: shrunk 0..1 } for the item's store or brand; null with no markdown.
+function standing(i, kind) {
+  const a = i.off > 0 && REL[kind].get(kind === "store" ? i.store : brandKey(i.brand));
+  if (!a) return null;
+  const below = countBelow(a, i.off - TIE), ties = countBelow(a, i.off + TIE, true) - below, n = a.length;
+  return { n, median: a[n >> 1], beats: (below + ties / 2) / n, score: (below + ties / 2 + SHRINK / 2) / (n + SHRINK) };
+}
+const rel = (i, kind) => standing(i, kind)?.score ?? null;
+function offNote(i) {                                        // badge tooltip: the discount in context
+  const parts = [i.off + "% off"];
+  for (const [kind, name] of [["store", i.store_name], ["brand", i.brand]]) {
+    const st = standing(i, kind);
+    if (st && st.n > 1) parts.push(name + (kind === "brand" ? " (all stores)" : "") + ": typically " + st.median + "% off; beats " +
+                                   Math.round(st.beats * 100) + "% of its " + st.n + " markdowns");
+  }
+  return parts.join("\n");
+}
 // Hidden by that setting, unless you put the store in one of your categories.
 const crowdedOut = i => prefs.calm && CROWD.hosts.has(i.store) && !(i.store in prefs.storeCats);
 const ruledOut = i => i.store in prefs.hidden || brandKey(i.brand) in prefs.muted;    // store or brand you hid
@@ -333,7 +367,10 @@ const highOn = i => [...i.hist].reverse().find(h => h[1] === trackedHigh(i))[0];
 const shortDay = d => new Date(d + "T12:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric" });
 // Best-deals score: the discount, plus signals that it is a deal for you. Tune the weights here.
 function score(i, brands) {
-  let s = (i.off || 0) >= 90 ? 30 : i.off || 0;              // 90%+ off is almost always a listing error
+  // The discount counts half for its size and half for how unusual it is at its store, so a store that marks
+  // everything 80% off doesn't crowd out a rare 45% elsewhere. 90%+ off is almost always a listing error.
+  const off = (i.off || 0) >= 90 ? 30 : i.off || 0, r = rel(i, "store");
+  let s = r == null ? off : off / 2 + 50 * r;
   if (brands.has(brandKey(i.brand))) s += 25;                // a brand you follow
   if (i.sz && !i.sz.includes("OS") && wantedSizes(i.kind).length && sizeOK(i)) s += 10;   // in stock in your size
   if (newLow(i)) s += 10;                                    // fell to its lowest tracked price
@@ -377,20 +414,31 @@ function filtered(items, brands) {
     (!gen || !i.g || i.g === gen) &&                         // unlabelled items count as unisex
     (!cat || (prefs.itemCats[i.id] || []).includes(cat)) &&
     (!q || (i.title + " " + (i.brand || "") + " " + i.store_name).toLowerCase().includes(q)));
-  const usd = i => i.usd ?? i.price;                         // compare prices in one currency
-  const sc = new Map(list.map(i => [i, score(i, brands)]));
-  const by = {
-    drop: (a, b) => dropShare(b) - dropShare(a) || (b.off || 0) - (a.off || 0),            // furthest below its high first
-    low: (a, b) => changedOn(b).localeCompare(changedOn(a)) || dropShare(b) - dropShare(a),  // newest new lows first
-    best: (a, b) => sc.get(b) - sc.get(a) || (b.off || 0) - (a.off || 0),
-    off: (a, b) => (b.off || 0) - (a.off || 0),
-    new: (a, b) => (b.first_seen || "").localeCompare(a.first_seen || ""),
-    lo: (a, b) => (usd(a) ?? 1e12) - (usd(b) ?? 1e12),
-    hi: (a, b) => (usd(b) ?? -1) - (usd(a) ?? -1),
-    store: (a, b) => a.store_name.localeCompare(b.store_name) || a.title.localeCompare(b.title),
-  }[sort];
-  return list.sort(by);
+  const key = SORTS[sort].key, keys = new Map(list.map(i => [i, key(i, brands)]));
+  const cmp = (x, y) => typeof x === "string" ? x.localeCompare(y) : x - y;
+  return list.sort((a, b) => {
+    const x = keys.get(a), y = keys.get(b);
+    if (x == null || y == null) return (x == null) - (y == null);   // nothing to sort on (no price, no markdown): last either way
+    return dir * cmp(x, y) || (b.off || 0) - (a.off || 0) || a.title.localeCompare(b.title);
+  });
 }
+
+// Every sort is a key, the direction it starts in (-1: biggest first) and words for both directions.
+// The button beside the menu flips the direction; picking another sort starts it at its own default.
+const HIGH = ["High to low", "Low to high"];
+const SORTS = {
+  best: { key: (i, brands) => score(i, brands), dir: -1, words: HIGH },
+  off: { key: i => i.off || 0, dir: -1, words: HIGH },
+  store_rel: { key: i => rel(i, "store"), dir: -1, words: ["Most unusual first", "Most routine first"] },
+  brand_rel: { key: i => rel(i, "brand"), dir: -1, words: ["Most unusual first", "Most routine first"] },
+  drop: { key: dropShare, dir: -1, words: ["Biggest fall first", "Smallest fall first"] },
+  low: { key: i => Date.parse(changedOn(i)) / 864e5 + dropShare(i) * 0.99, dir: -1, words: ["Newest first", "Oldest first"] },
+  new: { key: i => i.first_seen || null, dir: -1, words: ["Newest first", "Oldest first"] },
+  price: { key: i => i.usd ?? i.price ?? null, dir: 1, words: HIGH },   // compared in US dollars
+  store: { key: i => i.store_name + "\u0001" + i.title, dir: 1, words: ["Z to A", "A to Z"] },
+};
+let dir = -1;
+function showDir() { $("dir").textContent = (dir < 0 ? "↓ " : "↑ ") + SORTS[$("sort").value].words[dir < 0 ? 0 : 1]; }
 
 function star(i) {
   const b = el("button", "star"), set = () => {
@@ -497,7 +545,7 @@ function card(i) {
     pic.append(img);
   } else pic.textContent = i.link_only ? "Open listing" : "No image";
   a.append(pic);
-  if (i.off) a.append(el("span", "off", "-" + i.off + "%"));
+  if (i.off) { const o = el("span", "off", "-" + i.off + "%"); o.title = offNote(i); a.append(o); }
   if (i.first_seen && daysSince(i.first_seen) <= 3 && tab !== "wish") a.append(el("span", "new", "New"));
   const b = el("div", "body");
   b.append(el("div", "store", i.store_name + (i.brand && i.brand !== i.store_name ? " · " + i.brand : "")));
@@ -514,6 +562,9 @@ function card(i) {
   if (prefs.itemCats[i.id]) notes.push("In: " + prefs.itemCats[i.id].join(", "));
   if (i.gone) notes.push("No longer in the sale data; add its link to wishlist.txt to keep tracking it");
   if (i.tracked_drop) notes.push("Down from highest price tracked");
+  const by = { store_rel: "store", brand_rel: "brand" }[$("sort").value], st = by && standing(i, by);
+  if (st) notes.push("Beats " + Math.round(st.beats * 100) + "% of " + (by === "store" ? i.store_name : i.brand) +
+                     " markdowns (typically " + st.median + "%)");
   if (i.avail === false) notes.push("Sold out");
   if (i.stale) notes.push("Last update failed; showing older data");
   if (i.link_only) notes.push(i.note || "Price not tracked for this store");
@@ -549,8 +600,7 @@ function render() {
 }
 function reset() { shown = PAGE; render(); }
 // What the price-history sorts list, said under the filters (prices are tracked from the day an item is first seen).
-const HISTORY_SORT = { drop: " whose price fell while tracked, biggest fall first",
-                       low: " that just fell to their lowest tracked price, newest first" };
+const HISTORY_SORT = { drop: " whose price fell while tracked", low: " that fell to their lowest tracked price" };
 
 // ---- settings panel
 function chips(box, values, chosen) {
@@ -626,6 +676,7 @@ function fillCatMenus() {
 function setup() {
   IDS = new Set(DATA.items.map(i => i.id));
   CROWD = crowd();
+  REL = relStats();
   for (const [key, label] of TABS) {
     const btn = el("button", null, label); btn.dataset.tab = key; btn.append(el("span", "n", ""));
     btn.onclick = () => { tab = key; reset(); };
@@ -645,6 +696,9 @@ function setup() {
   const stores = [...new Map(DATA.items.map(i => [i.store, i.store_name])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
   $("store").append(new Option("All stores", ""), ...stores.map(([h, n]) => new Option(n, h)));
   fillCatMenus();
+  $("sort").addEventListener("input", () => { dir = SORTS[$("sort").value].dir; showDir(); });   // before the redraw below
+  $("dir").onclick = () => { dir = -dir; showDir(); reset(); };
+  showDir();
   for (const id of ["q", "group", "store", "itemcat", "storecat", "minoff", "sort", "stock", "mysizes"]) $(id).addEventListener("input", reset);
   $("gender").value = prefs.gender;                           // remembered between visits
   $("gender").addEventListener("input", () => { prefs.gender = $("gender").value; savePrefs(); reset(); });
