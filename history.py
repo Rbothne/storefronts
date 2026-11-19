@@ -11,7 +11,9 @@ A store's file looks like this (times are UTC, to the minute):
     {"since": first read, "fetched": last clean read, "partial": true if only part of its catalogue is read,
      "cur": currency of the prices, "reads": 12, "fails": 1, "error": the latest failure (absent after a clean read),
      "log": [[day, products, in stock, on sale, typical percent off], ...]   one line per day
-     "products": {id: {"f": first seen, "h": [[time, price, percent off, in stock], ...], "x": noticed gone}}}
+     "products": {id: {"f": first seen, "h": [[time, price, percent off, in stock], ...], "x": noticed gone,
+                       "b": brand, "k": kind ("tops", "footwear", "kitchen", ...), "p": day the store published it,
+                       "n": sizes offered, "z": [[time, [sizes in stock]], ...] while it is on sale}}}
 The percent off is the store's own (its "was" price against its price); 0 when it shows none.
 """
 import collections
@@ -33,6 +35,8 @@ METRICS_PATH = os.path.join(ROOT, "docs", "metrics.json")
 NOISE = 0.03
 KEEP_POINTS = 30          # per product
 KEEP_DAYS = 90            # a product gone this long is forgotten
+KEEP_SIZES = 12           # changes of the sizes in stock kept per product
+MATURE = 14               # days a deal must have been watchable before it counts in "how deals end" and "cut further"
 HORIZONS = (1, 3, 7, 14, 30)
 
 
@@ -121,7 +125,8 @@ def record(rec, now, price, off, stock):
 def track(st, readings, now, min_off, cur, errors, whole):
     """Fold one read of a store into its tracking file.
 
-    readings: id -> (price, percent off, in stock) for every product the read returned.
+    readings: id -> {"price", "off" (percent), "avail" (in stock), and where known "brand", "kind", "published"}
+              for every product the read returned.
     errors:   what went wrong, if anything. Products are only marked as gone after a clean read.
     whole:    False when the read covers part of the catalogue (some collections, or the page cap was hit),
               so a product missing from it may simply be outside the part that was read.
@@ -132,9 +137,14 @@ def track(st, readings, now, min_off, cur, errors, whole):
         for rec in products.values():
             rec["h"] = []
     st["cur"] = cur
-    for pid, (price, off, avail) in readings.items():
-        if price:
-            record(products.setdefault(pid, {"f": now, "h": []}), now, price, off, 0 if avail is False else 1)
+    for pid, r in readings.items():
+        if not r["price"]:
+            continue
+        rec = products.setdefault(pid, {"f": now, "h": []})
+        record(rec, now, r["price"], r["off"], 0 if r["avail"] is False else 1)
+        for key, name in (("b", "brand"), ("k", "kind"), ("p", "published")):
+            if r.get(name) and (key != "p" or "p" not in rec):     # the first publish day seen is kept
+                rec[key] = r[name]
     st["reads"] = st.get("reads", 0) + 1
     if errors:
         st["fails"], st["error"] = st.get("fails", 0) + 1, errors[0][:200]
@@ -145,13 +155,23 @@ def track(st, readings, now, min_off, cur, errors, whole):
         if pid not in readings and "x" not in rec:
             rec["x"] = now
     # a line a day for the store's long-run picture; product histories are trimmed, this is not
-    live = [off for price, off, avail in readings.values() if price and avail is not False]
+    live = [r["off"] for r in readings.values() if r["price"] and r["avail"] is not False]
     sale = [off for off in live if off >= min_off]
     log = st.setdefault("log", [])
     if log and log[-1][0] == now[:10]:
         log.pop()
     log.append([now[:10], len(readings), len(live), len(sale), round(statistics.median(sale)) if sale else 0])
     del log[:-400]
+
+
+def record_sizes(rec, now, sizes, offered):
+    """Note which sizes of an on-sale product are in stock, when that changes. Stores don't publish stock counts;
+    the sizes left are the nearest thing."""
+    rec["n"] = offered
+    z = rec.setdefault("z", [])
+    if not z or z[-1][1] != sizes:
+        z.append([now, sizes])
+        del z[:-KEEP_SIZES]
 
 
 # ---------------------------------------------------------------- reading a history
@@ -284,16 +304,22 @@ def survival(spans):
 
 
 def summarise(found):
-    """Indicators for a list of (deal, when its store was last read)."""
+    """Indicators for a list of (deal, when its store was last read).
+
+    How deals end, and how many are cut further, are counted over "mature" deals only: those that began at
+    least MATURE days before the store's last read. Among younger deals the ones already over are the quick
+    ones (mostly sell-outs), and few have had time to be cut, so counting them would mislead.
+    """
     known = [(d, t) for d, t in found if d["known"]]
     spans = [(max(0.0, days(d["start"], d.get("end") or t)), "how" in d) for d, t in known]
     left, half = survival(spans)
-    how = collections.Counter(d["how"] for d, _ in known if "how" in d)
-    cuts = [days(d["start"], d["cut"]) for d, _ in known if "cut" in d]
+    mature = [d for d, t in known if days(d["start"], t) >= MATURE]
+    how = collections.Counter(d.get("how", "left" if "end" in d else "running") for d in mature)
+    cuts = [days(d["start"], d["cut"]) for d in mature if "cut" in d]
     checked = [d["marked_up"] for d, _ in found if "marked_up" in d]
-    return {"deals": len(known), "running": sum(1 for d, _ in known if "end" not in d),
+    return {"deals": len(known), "left": left, "half": half,
+            "mature": len(mature), "running": how["running"],
             "sold_out": how["sold out"], "sale_ended": how["sale ended"], "taken_down": how["taken down"],
-            "left": left, "half": half,
             "cut": len(cuts), "cut_days": round(statistics.median(cuts), 1) if cuts else None,
             "marked_up": sum(checked), "checked": len(checked)}
 
@@ -330,7 +356,7 @@ def metrics(state, names, min_off, now):
             "weekday": [starts.count(n) for n in range(7)],
             "storewide": wide,
             **summarise(found), "bands": by_band(found, min_off)})
-    return {"generated": now, "min_discount": min_off, "horizons": HORIZONS,
+    return {"generated": now, "min_discount": min_off, "horizons": HORIZONS, "mature_days": MATURE,
             "since": min((s["since"] for s in stores), default=now),
             "products": sum(s["products"] for s in stores), "stock": sum(s["stock"] for s in stores),
             "sale": len(now_off), "typical": round(statistics.median(now_off)) if now_off else None,

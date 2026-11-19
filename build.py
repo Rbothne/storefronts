@@ -132,6 +132,7 @@ def shopify_item(host, p, cents=False):
         "tags": [],
         # products.json calls it product_type, /products/x.js calls it type
         "ptype": p.get("product_type") or p.get("type") or "",
+        "published": str(p.get("published_at") or "")[:10],   # used for tracking, then dropped
     }
 
 
@@ -502,6 +503,18 @@ def size_tokens(kind, live, every):
     return sorted(out, key=lambda t: (LETTERS.index(t) if t in LETTERS else 99, t))
 
 
+def group_kind(store, ptype, title):
+    """(group, kind) for an item: the store's group by default, sorted per item for clothing and mixed stores."""
+    group, kind = store.get("group", "other"), None
+    # Clothing stores, and others marked "mixed", get sorted per item.
+    # Pure kitchen / stationery shops don't: "Pen Cap" is not a hat.
+    if group == "clothing" or store.get("mixed"):
+        group, _, kind = (categorize(ptype, title) or group).partition("/")
+        if group == "clothing":
+            kind = kind or store.get("kind", "other")
+    return group, kind or None
+
+
 # ---------------------------------------------------------------- currency
 
 # Units per US dollar; only used if the rate service and the last build's rates are both missing.
@@ -581,7 +594,7 @@ def main():
 
     def fetch_store(host):
         """Everything wanted from one store: (item, tag) pairs, errors, how many items qualified, a reading of
-        every product in its catalogue (id -> price, percent off, in stock) and whether that is the whole catalogue.
+        every product in its catalogue (see history.track) and whether that is the whole catalogue.
 
         Stores are fetched on separate threads; requests to any one store stay
         sequential and spaced out.
@@ -616,7 +629,10 @@ def main():
                                 if not it or p.get("handle") in seen:
                                     continue
                                 seen.add(p.get("handle"))
-                                readings[it["id"]] = (it["price"], it["off"], it["avail"])
+                                group, kind = group_kind(store, it["ptype"], it["title"])
+                                readings[it["id"]] = {"price": it["price"], "off": it["off"], "avail": it["avail"],
+                                                      "brand": store.get("brand") or it["brand"],
+                                                      "kind": kind or group, "published": it["published"]}
                                 # A quiet price cut: the store shows no "was" price, but the price is well under
                                 # the highest one tracked here.
                                 high = max((pt[1] for pt in known.get(it["id"], {}).get("h", [])), default=0)
@@ -703,7 +719,7 @@ def main():
         for item, tag in found:
             add(item, tag)
             if item and item.get("price") is not None:     # followed items read one at a time are tracked too
-                readings.setdefault(item["id"], (item["price"], item["off"], item["avail"]))
+                readings.setdefault(item["id"], {"price": item["price"], "off": item["off"], "avail": item["avail"]})
         if readings or store["platform"] != "link":
             history.track(state.setdefault(host, {}), readings, T, min_off, store.get("currency", "USD"), errors, whole)
 
@@ -729,15 +745,9 @@ def main():
             it["brand"] = s["brand"]
         ptype = it.pop("ptype", "")
         old = it.get("stale") or it.pop("carried", False)   # reused from the last run: keep what it had
+        it.pop("published", None)
         if not old:
-            group, kind = s.get("group", "other"), None
-            # Clothing stores, and others marked "mixed", get sorted per item.
-            # Pure kitchen / stationery shops don't: "Pen Cap" is not a hat.
-            if group == "clothing" or s.get("mixed"):
-                group, _, kind = (categorize(ptype, it["title"]) or group).partition("/")
-                if group == "clothing":
-                    kind = kind or s.get("kind", "other")
-            it["group"], it["kind"] = group, kind or None
+            it["group"], it["kind"] = group_kind(s, ptype, it["title"])
         it["cur"] = it.get("cur") or s.get("currency", "USD")
         if not it.get("g") and s.get("fits"):    # a women's or men's boutique: unlabelled items are that
             it["g"] = {"women": "w", "men": "m"}[s["fits"]]
@@ -749,6 +759,9 @@ def main():
             it.pop("sz", None)
             if sz:
                 it["sz"] = sz
+            rec = state.get(it["store"], {}).get("products", {}).get(it["id"])
+            if rec and it["off"] >= min_off and it["avail"] and every:
+                history.record_sizes(rec, T, sz or it["sizes"], len(every))
             if it.get("price") is not None and rates.get(it["cur"]):
                 it["usd"] = round(it["price"] / rates[it["cur"]], 2)
         if old:

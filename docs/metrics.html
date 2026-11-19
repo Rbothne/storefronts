@@ -85,7 +85,9 @@
       began. <b>Half gone within</b> is how long it takes for half to end.</li>
     <li>A deal ends when the product <b>sells out</b>, when the <b>sale ends</b> (the price goes back up) or when the store
       <b>takes it down</b>.</li>
-    <li><b>Cut further</b> counts deals whose price later fell another 5% or more, with the usual wait.</li>
+    <li><b>Cut further</b> is the share of deals whose price later fell another 5% or more, with the usual wait.</li>
+    <li><b>How they ended</b> and <b>Cut further</b> only count deals that began at least two weeks ago. Among younger
+      deals the ones already over are the quick ones, and few have had time to be cut, so they show "too early" until then.</li>
     <li><b>Marked-up "was" price</b> counts deals whose crossed-out price is over 5% above every price tracked here
       before the sale. It can only be checked for products seen before their sale began.</li>
     <li>A figure based on fewer than <span id="min"></span> deals is shown as "too few".</li>
@@ -110,13 +112,18 @@ function cell(text, title, cls) { const td = el("td", cls, text); if (title) td.
 // A rate from too few deals is noise: say so instead of showing it.
 const enough = g => g.deals >= MIN;
 const few = () => cell("too few", "Fewer than " + MIN + " deals watched from their start", "none");
+// How deals end and how many are cut again are counted over deals that began at least M.mature_days ago. Among
+// younger deals the ones already over are the quick ones, and few have had time to be cut.
+const ripe = g => g.mature >= MIN;
+const early = g => cell("too early", "Counts deals that began at least " + M.mature_days + " days ago: " + g.mature + " so far, " + MIN + " needed", "none");
 function ended(g) {
-  const n = g.sold_out + g.sale_ended + g.taken_down;
-  if (!n) return "none yet";
-  return [["sold out", g.sold_out], ["sale ended", g.sale_ended], ["taken down", g.taken_down]]
-    .filter(r => r[1]).sort((a, b) => b[1] - a[1]).map(r => Math.round(r[1] / n * 100) + "% " + r[0]).join(", ");
+  if (!ripe(g)) return early(g);
+  return cell([["sold out", g.sold_out], ["sale ended", g.sale_ended], ["taken down", g.taken_down], ["still running", g.running]]
+    .filter(r => r[1]).sort((a, b) => b[1] - a[1]).map(r => Math.round(r[1] / g.mature * 100) + "% " + r[0]).join(", "),
+    "Of the " + g.mature + " deals that began at least " + M.mature_days + " days ago");
 }
-const cut = g => !g.cut ? "none yet" : pct(g.cut / g.deals) + " (after " + span(g.cut_days) + ")";
+const cut = g => !ripe(g) ? early(g) : cell(g.cut ? pct(g.cut / g.mature) + " (after " + span(g.cut_days) + ")" : "0%",
+  g.cut + " of the " + g.mature + " deals that began at least " + M.mature_days + " days ago");
 // Until half of a group's deals have ended, all that can be said is "longer than we have watched".
 const watched = (g, horizons) => Math.max(0, ...horizons.filter(d => g.left[d] != null));
 const half = (g, horizons) => g.half == null
@@ -131,11 +138,12 @@ function lifeTable(table, groups, horizons, first) {
   const thead = el("thead"), body = el("tbody"); thead.append(head);
   for (const [label, g] of groups) {
     const tr = el("tr"); tr.append(cell(label), cell(num(g.deals)));
-    if (!enough(g)) { const td = few(); td.colSpan = horizons.length + 3; td.style.textAlign = "center"; tr.append(td); }
+    if (!enough(g)) { const td = few(); td.colSpan = horizons.length + 1; td.style.textAlign = "center"; tr.append(td); }
     else {
       for (const d of horizons) tr.append(cell(pct(g.left[d]), g.left[d] == null ? "No deal has been watched this long yet" : "", g.left[d] == null ? "none" : ""));
-      tr.append(half(g, horizons), cell(ended(g)), cell(cut(g)));
+      tr.append(half(g, horizons));
     }
+    tr.append(ended(g), cut(g));
     body.append(tr);
   }
   table.replaceChildren(thead, body);
@@ -165,7 +173,7 @@ const COLS = [
   ["Deals watched", s => s.deals, s => cell(num(s.deals))],
   ["Still available after 3 days", s => enough(s) ? s.left[3] : null, s => enough(s) ? cell(pct(s.left[3])) : few()],
   ["Half gone within", s => enough(s) ? s.half ?? 1e9 : null, s => enough(s) ? half(s, M.horizons) : few()],
-  ["Cut further", s => enough(s) ? s.cut / s.deals : null, s => enough(s) ? cell(cut(s)) : few()],
+  ["Cut further", s => ripe(s) ? s.cut / s.mature : null, cut],
   ["Marked-up \"was\" price", s => s.checked >= MIN ? s.marked_up / s.checked : null,
    s => s.checked >= MIN ? cell(pct(s.marked_up / s.checked), s.marked_up + " of " + s.checked + " deals checked") : few()],
   ["Last read", s => s.fetched || "", s => cell(ago(s.fetched), s.error || "", s.error ? "bad" : "")],
