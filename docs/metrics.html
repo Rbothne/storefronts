@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Site metrics</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f5f2; --card: #ffffff; --ink: #1b1b1a; --muted: #6f6e69; --line: #e2e0da;
+    --accent: #1f4d3a; --sale: #a8321f; --chip: #eceae4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141413; --card: #1e1e1c; --ink: #ecebe6; --muted: #9a988f; --line: #30302c;
+            --accent: #8fc7ab; --sale: #f08a73; --chip: #2a2a27; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1200px; margin: 0 auto; padding: 16px 16px 48px; }
+  a { color: var(--accent); }
+  h1 { font-size: 22px; margin: 8px 0 2px; }
+  h2 { font-size: 16px; margin: 28px 0 4px; }
+  p { margin: 4px 0 10px; }
+  .muted, .sub { color: var(--muted); }
+  .sub { max-width: 75ch; }
+  .tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin: 14px 0 4px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .tile b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .tile span { color: var(--muted); font-size: 12px; }
+  .scroll { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 7px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; position: sticky; left: 0; background: var(--card); }   /* the name stays put while a wide table scrolls */
+  tr:last-child > td { border-bottom: 0; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; vertical-align: bottom; white-space: normal; min-width: 70px; }
+  th button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: inherit; }
+  th button[aria-sort]::after { content: " ↓"; }
+  th button[aria-sort="ascending"]::after { content: " ↑"; }
+  #stores tbody tr.row { cursor: pointer; }
+  #stores tbody tr.row:hover td { background: var(--chip); }
+  td.none { color: var(--muted); }
+  td.detail { text-align: left; white-space: normal; background: var(--bg); padding: 12px; position: static; }
+  /* the detail stays as wide as the screen and in view, however far the store table is scrolled sideways */
+  td.detail > div { position: sticky; left: 12px; width: min(100%, calc(100vw - 58px)); }
+  td.detail .scroll { margin: 6px 0 12px; }
+  .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; margin-left: 6px; }
+  .bad { color: var(--sale); }
+  input[type=search] { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line);
+                       border-radius: 8px; padding: 6px 8px; width: min(260px, 100%); margin: 4px 0 8px; }
+  svg.trend { vertical-align: middle; overflow: visible; }
+  svg.trend path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  ul { margin: 6px 0; padding-left: 20px; }
+  li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<main>
+  <a href="./">← Listings</a>
+  <h1>Site metrics</h1>
+  <p class="muted" id="when">Loading…</p>
+  <div class="tiles" id="tiles"></div>
+
+  <h2>How long deals last</h2>
+  <p class="sub">A deal is the stretch a product spends in stock with at least the minimum discount. Only deals whose
+    start was seen are counted, and deals still running count for as long as they have been watched. A store is read
+    every few hours, so anything shorter than that is missed.</p>
+  <div class="scroll"><table id="bands"></table></div>
+
+  <h2>Stores</h2>
+  <p class="sub">Select a store for its detail. Select a column heading to sort by it.</p>
+  <input type="search" id="q" placeholder="Find a store" aria-label="Find a store">
+  <div class="scroll"><table id="stores"></table></div>
+
+  <h2>Store-wide price changes</h2>
+  <p class="sub">Times a store moved many prices by the same percentage at once while its discounts stayed the same:
+    a repricing or a currency swing, not a sale. Items caught in one are left out of the Price change sort.</p>
+  <ul id="wide"></ul>
+
+  <h2>Reading these numbers</h2>
+  <ul class="sub">
+    <li><b>Typical discount</b> is the middle one: half the store's sale items are marked down more, half less.</li>
+    <li><b>Still available after N days</b> is the share of deals still in stock at the sale price that long after they
+      began. <b>Half gone within</b> is how long it takes for half to end.</li>
+    <li>A deal ends when the product <b>sells out</b>, when the <b>sale ends</b> (the price goes back up) or when the store
+      <b>takes it down</b>.</li>
+    <li><b>Cut further</b> counts deals whose price later fell another 5% or more, with the usual wait.</li>
+    <li><b>Marked-up "was" price</b> counts deals whose crossed-out price is over 5% above every price tracked here
+      before the sale. It can only be checked for products seen before their sale began.</li>
+    <li>A figure based on fewer than <span id="min"></span> deals is shown as "too few".</li>
+    <li>The table at the top counts every deal at every store, so the stores with the most deals weigh most in it.</li>
+  </ul>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id), MIN = 20;       // fewer deals than this: no rate is shown
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+const num = n => n == null ? "–" : n.toLocaleString();
+const pct = x => x == null ? "–" : Math.round(x * 100) + "%";
+const span = d => d == null ? "–" : d < 1 ? Math.max(1, Math.round(d * 24)) + " h" : d === 1 ? "1 day" : (d < 10 ? +d.toFixed(1) : Math.round(d)) + " days";
+const stamp = t => t ? new Date(t.length > 10 ? t.slice(0, 16) + "Z" : t + "T12:00:00Z") : null;
+const day = t => t ? stamp(t).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "–";
+function ago(t) {
+  if (!t) return "never";
+  const h = (Date.now() - stamp(t)) / 36e5;
+  return h < 1 ? "under 1 h ago" : h < 48 ? Math.round(h) + " h ago" : Math.round(h / 24) + " days ago";
+}
+function cell(text, title, cls) { const td = el("td", cls, text); if (title) td.title = title; return td; }
+// A rate from too few deals is noise: say so instead of showing it.
+const enough = g => g.deals >= MIN;
+const few = () => cell("too few", "Fewer than " + MIN + " deals watched from their start", "none");
+function ended(g) {
+  const n = g.sold_out + g.sale_ended + g.taken_down;
+  if (!n) return "none yet";
+  return [["sold out", g.sold_out], ["sale ended", g.sale_ended], ["taken down", g.taken_down]]
+    .filter(r => r[1]).sort((a, b) => b[1] - a[1]).map(r => Math.round(r[1] / n * 100) + "% " + r[0]).join(", ");
+}
+const cut = g => !g.cut ? "none yet" : pct(g.cut / g.deals) + " (after " + span(g.cut_days) + ")";
+// Until half of a group's deals have ended, all that can be said is "longer than we have watched".
+const watched = (g, horizons) => Math.max(0, ...horizons.filter(d => g.left[d] != null));
+const half = (g, horizons) => g.half == null
+  ? cell("over " + span(watched(g, horizons)), "Fewer than half have ended in the time watched")
+  : cell(span(g.half));
+
+// The deal-life table: one line per group (a discount band).
+function lifeTable(table, groups, horizons, first) {
+  const head = el("tr");
+  for (const h of [first, "Deals watched", ...horizons.map(d => "Still available after " + (d === 1 ? "1 day" : d + " days")),
+                   "Half gone within", "How they ended", "Cut further"]) head.append(el("th", null, h));
+  const thead = el("thead"), body = el("tbody"); thead.append(head);
+  for (const [label, g] of groups) {
+    const tr = el("tr"); tr.append(cell(label), cell(num(g.deals)));
+    if (!enough(g)) { const td = few(); td.colSpan = horizons.length + 3; td.style.textAlign = "center"; tr.append(td); }
+    else {
+      for (const d of horizons) tr.append(cell(pct(g.left[d]), g.left[d] == null ? "No deal has been watched this long yet" : "", g.left[d] == null ? "none" : ""));
+      tr.append(half(g, horizons), cell(ended(g)), cell(cut(g)));
+    }
+    body.append(tr);
+  }
+  table.replaceChildren(thead, body);
+}
+
+// Share of in-stock products on sale, day by day (drawn once there are three days to draw).
+function trend(log) {
+  const pts = log.filter(r => r[2]).map(r => [r[0], r[3] / r[2]]);
+  if (pts.length < 3) return null;
+  const NS = "http://www.w3.org/2000/svg", W = 60, H = 18, hi = Math.max(...pts.map(p => p[1]), 0.01);
+  const svg = document.createElementNS(NS, "svg"), path = document.createElementNS(NS, "path"), title = document.createElementNS(NS, "title");
+  path.setAttribute("d", pts.map((p, n) => (n ? "L" : "M") + (n / (pts.length - 1) * W).toFixed(1) + "," + (H - 2 - p[1] / hi * (H - 4)).toFixed(1)).join(""));
+  title.textContent = "Share of in-stock products on sale: " + pts.map(p => day(p[0]) + " " + pct(p[1])).join(", ");
+  svg.setAttribute("class", "trend"); svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", title.textContent); svg.append(title, path);
+  return svg;
+}
+
+// Store table columns: heading, value to sort by, cell.
+const share = s => s.stock ? s.sale / s.stock : null;
+const COLS = [
+  ["Store", s => s.name.toLowerCase(), s => { const td = cell(s.name); if (s.partial) { const t = el("span", "tag", "part read"); t.title = "Only part of this store's catalogue is read, so a product that disappears may only have left that part"; td.append(t); } return td; }],
+  ["Products tracked", s => s.products, s => cell(num(s.products))],
+  ["On sale now", s => s.sale, s => cell(num(s.sale))],
+  ["Share on sale", share, s => { const td = cell(pct(share(s)) + " "), t = trend(s.log); if (t) td.append(t); return td; }],
+  ["Typical discount", s => s.typical, s => cell(s.typical == null ? "–" : s.typical + "%")],
+  ["Deals watched", s => s.deals, s => cell(num(s.deals))],
+  ["Still available after 3 days", s => enough(s) ? s.left[3] : null, s => enough(s) ? cell(pct(s.left[3])) : few()],
+  ["Half gone within", s => enough(s) ? s.half ?? 1e9 : null, s => enough(s) ? half(s, M.horizons) : few()],
+  ["Cut further", s => enough(s) ? s.cut / s.deals : null, s => enough(s) ? cell(cut(s)) : few()],
+  ["Marked-up \"was\" price", s => s.checked >= MIN ? s.marked_up / s.checked : null,
+   s => s.checked >= MIN ? cell(pct(s.marked_up / s.checked), s.marked_up + " of " + s.checked + " deals checked") : few()],
+  ["Last read", s => s.fetched || "", s => cell(ago(s.fetched), s.error || "", s.error ? "bad" : "")],
+  ["Failed reads", s => s.reads ? s.fails / s.reads : null, s => cell(s.fails ? s.fails + " of " + s.reads : "0", "", s.fails ? "" : "none")],
+];
+let M, sortBy = 2, sortDir = -1, open = null;
+
+function detail(s) {
+  const outer = el("td", "detail"), td = el("div"); outer.colSpan = COLS.length; outer.append(td);
+  td.append(el("div", "muted", "Tracked since " + day(s.since) + (s.error ? ". Latest read failed: " + s.error : "")));
+  td.append(el("b", null, "Deals by discount"));
+  const wrap = el("div", "scroll"), t = el("table"); lifeTable(t, Object.entries(s.bands), M.horizons, "Discount"); wrap.append(t); td.append(wrap);
+  // weekdays mean nothing until a few weeks have gone by
+  if (s.weekday.reduce((a, b) => a + b, 0) >= 50 && Date.now() - stamp(s.since) > 21 * 864e5)
+    td.append(el("div", null, "New markdowns by weekday: " + ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, n) => d + " " + s.weekday[n]).join(" · ")));
+  for (const e of s.storewide) td.append(el("div", null, "Store-wide price change on " + day(e.t) + ": " + (e.pct > 0 ? "+" : "") + e.pct + "% on " + num(e.n) + " products"));
+  if (s.log.length) {
+    td.append(el("b", null, "Day by day"));
+    const w = el("div", "scroll"), lt = el("table"), head = el("tr");
+    for (const h of ["Day", "Products", "In stock", "On sale", "Share on sale", "Typical discount"]) head.append(el("th", null, h));
+    lt.append(head);
+    for (const r of s.log.slice(-14).reverse()) {
+      const tr = el("tr"); tr.append(cell(day(r[0])), cell(num(r[1])), cell(num(r[2])), cell(num(r[3])), cell(pct(r[2] ? r[3] / r[2] : null)), cell(r[3] ? r[4] + "%" : "–"));
+      lt.append(tr);
+    }
+    w.append(lt); td.append(w);
+  }
+  const tr = el("tr"); tr.append(outer); return tr;
+}
+
+function stores() {
+  const q = $("q").value.trim().toLowerCase(), key = COLS[sortBy][1];
+  const list = M.stores.filter(s => !q || s.name.toLowerCase().includes(q) || s.host.includes(q));
+  // stores without a value always go last, whichever way the column is sorted
+  list.sort((a, b) => { const x = key(a), y = key(b); return x == null ? (y == null ? 0 : 1) : y == null ? -1 : (x < y ? -1 : x > y ? 1 : 0) * sortDir; });
+  const head = el("tr");
+  COLS.forEach(([name], n) => {
+    const th = el("th"), b = el("button", null, name);
+    if (n === sortBy) b.setAttribute("aria-sort", sortDir < 0 ? "descending" : "ascending");
+    b.onclick = () => { sortDir = n === sortBy ? -sortDir : n ? -1 : 1; sortBy = n; stores(); };
+    th.append(b); head.append(th);
+  });
+  const thead = el("thead"), body = el("tbody"); thead.append(head);
+  for (const s of list) {
+    const tr = el("tr", "row"); tr.tabIndex = 0;
+    for (const c of COLS) tr.append(c[2](s));
+    tr.onclick = () => { open = open === s.host ? null : s.host; stores(); };
+    tr.onkeydown = e => { if (e.key === "Enter") tr.onclick(); };
+    body.append(tr);
+    if (open === s.host) body.append(detail(s));
+  }
+  if (!list.length) { const tr = el("tr"), td = cell("No store matches", "", "none"); td.colSpan = COLS.length; tr.append(td); body.append(tr); }
+  $("stores").replaceChildren(thead, body);
+}
+
+function show(m) {
+  M = m; $("min").textContent = MIN;
+  $("when").textContent = "Updated " + new Date(m.generated).toLocaleString() + ". Tracking since " + day(m.since) + ".";
+  const tiles = [[num(m.stores.length), "stores tracked"], [num(m.products), "products tracked"], [num(m.stock), "in stock"],
+    [num(m.sale), "on sale now (" + m.min_discount + "% off or more): " + pct(m.stock ? m.sale / m.stock : null) + " of those in stock"],
+    [m.typical == null ? "–" : m.typical + "%", "typical discount on a sale item"], [num(m.deals), "deals watched from their start"]];
+  $("tiles").replaceChildren(...tiles.map(([big, small]) => { const t = el("div", "tile"); t.append(el("b", null, big), el("span", null, small)); return t; }));
+  lifeTable($("bands"), [...Object.entries(m.bands), ["Every discount", m]], m.horizons, "Discount");
+  stores();
+  $("wide").replaceChildren(...(m.storewide.length ? m.storewide.map(e =>
+    el("li", null, day(e.t) + " · " + e.name + ": " + (e.pct > 0 ? "+" : "") + e.pct + "% on " + num(e.n) + " of " + num(e.of) + " products"))
+    : [el("li", "muted", "None seen yet.")]));
+}
+$("q").oninput = stores;
+fetch("metrics.json", { cache: "no-store" })
+  .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+  .then(show)
+  .catch(() => { $("when").textContent = "The metrics could not be loaded. Try again in a minute."; });
+</script>
+</body>
+</html>

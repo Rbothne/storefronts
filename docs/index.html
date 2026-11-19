@@ -56,6 +56,7 @@
   .pic img { object-fit: cover; display: block; margin: -8px; width: calc(100% + 16px); height: calc(100% + 16px); max-width: none; }
   .off { position: absolute; top: 8px; left: 8px; background: var(--sale); color: #fff; font-weight: 700;
          padding: 2px 7px; border-radius: 6px; font-size: 12px; }
+  .off.tracked { background: var(--accent); color: var(--bg); }   /* no "was" price from the store: measured from the price tracked here */
   .new { position: absolute; top: 8px; right: 46px; background: var(--accent); color: var(--bg); font-weight: 600;
          padding: 2px 7px; border-radius: 6px; font-size: 11px; }
   .star { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; border-radius: 50%; padding: 0;
@@ -85,6 +86,7 @@
   footer { color: var(--muted); font-size: 12px; padding: 0 14px 30px; }
   footer details { margin-top: 6px; }
   footer li.bad { color: var(--sale); }
+  footer > a { display: inline-block; margin-top: 8px; color: var(--accent); }
   .empty { color: var(--muted); padding: 40px 0; text-align: center; grid-column: 1 / -1; }
 
   dialog { width: min(680px, 94vw); max-height: 90vh; border: 1px solid var(--line); border-radius: 12px;
@@ -437,7 +439,7 @@ function filtered(items, brands) {
   const list = items.filter(i =>
     inTab(i, tab, brands) &&
     // the two price-history sorts list only items whose price actually fell while tracked
-    (sort !== "drop" || dropped(i) || rose(i)) &&
+    (sort !== "drop" || (dropped(i) || rose(i)) && !i.storewide) &&
     (!g || i.group === g || i.group + "/" + i.kind === g || (g === "shops" && i.group !== "clothing")) && (!s || i.store === s) &&
     (i.off || 0) >= min && (!stock || i.avail === true) && (!mine || sizeOK(i)) &&
     fitsShown(i, gen) &&
@@ -581,13 +583,15 @@ function spark(i) {
   svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", title.textContent);
   // Today's price as a dot: green at its tracked low, red at its tracked high, yellow in between
   // (within 3% counts as at, the margin the build uses for exchange-rate drift). The label says the same in words.
-  const level = newLow(i) ? "low" : i.price >= hi * 0.97 ? "high" : "mid";
+  const level = i.storewide ? "mid" : newLow(i) ? "low" : i.price >= hi * 0.97 ? "high" : "mid";
   path.setAttribute("d", d); dot.setAttribute("cx", W - 5); dot.setAttribute("cy", y(i.price)); dot.setAttribute("r", 3.5);
   dot.setAttribute("class", level);
   svg.append(title, path, dot);
   const row = el("div", "hist"); row.append(svg);
   const pct = Math.round(dropShare(i) * 100) + "%";
-  row.append(el("span", null, level === "low" ? "↓ New low: " + pct + " under " + money(hi, i.cur) + " on " + shortDay(highOn(i))
+  // a repricing of the whole store says nothing about this item, so it is not called a low or a high
+  row.append(el("span", null, i.storewide ? "Store-wide price change: " + (i.storewide > 0 ? "+" : "") + i.storewide + "% on " + shortDay(changedOn(i))
+                             : level === "low" ? "↓ New low: " + pct + " under " + money(hi, i.cur) + " on " + shortDay(highOn(i))
                              : level === "high" ? "↑ Up " + Math.round(riseShare(i) * 100) + "% from " + money(lo, i.cur) + " since " + shortDay(changedOn(i))
                              : pct + " under its high of " + money(hi, i.cur) + "; low " + money(lo, i.cur)));
   return row;
@@ -602,7 +606,11 @@ function card(i) {
     pic.append(img);
   } else pic.textContent = i.link_only ? "Open listing" : "No image";
   a.append(pic);
-  if (i.off) { const o = el("span", "off", "-" + i.off + "%"); o.title = offNote(i); a.append(o); }
+  if (i.off) {
+    const o = el("span", "off" + (i.tracked_drop ? " tracked" : ""), (i.tracked_drop ? "↓ " : "-") + i.off + "%" + (i.tracked_drop ? " tracked" : ""));
+    o.title = i.tracked_drop ? "The store shows no original price. This is " + i.off + "% under the highest price tracked here." : offNote(i);
+    a.append(o);
+  }
   if (i.first_seen && daysSince(i.first_seen) <= 3 && tab !== "wish") a.append(el("span", "new", "New"));
   const b = el("div", "body");
   b.append(el("div", "store", i.store_name + (i.brand && i.brand !== i.store_name ? " · " + i.brand : "")));
@@ -827,6 +835,8 @@ function setup() {
   for (const s of [...bad, ...DATA.status.filter(s => s.ok)])
     ul.append(el("li", s.ok ? null : "bad", s.name + ": " + s.count + " items" + (s.ok ? "" : " — " + s.errors.join("; "))));
   d.append(ul); foot.append(d);
+  const metrics = el("a", null, "Site metrics: how long deals last, each store's typical discount and more");
+  metrics.href = "metrics.html"; foot.append(metrics);
   if (!pool().some(isFollowed)) tab = "all";                 // nothing followed yet: open on everything
   render();
 }

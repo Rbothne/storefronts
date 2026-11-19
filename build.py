@@ -3,8 +3,9 @@
 
 Reads   stores.json   (which stores, how to read them)
         wishlist.txt  (one URL per line: product pages to follow)
-Writes  docs/data.json    (what the page shows)
-        data/state.json   (first-seen date and price changes for every item)
+Writes  docs/data.json     (what the page shows)
+        data/state/        (one file per store: price, discount and stock changes of every product; see history.py)
+        docs/metrics.json  (indicators for the metrics page, worked out from data/state/)
 
 Standard library only.  Run:  python3 build.py
 """
@@ -20,10 +21,11 @@ import urllib.error
 import urllib.request
 from urllib.parse import unquote, urlparse
 
+import history
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
-TODAY = datetime.date.today().isoformat()
 DELAY = 1.0
 COME_BACK = 180       # the come-back pass over rate-limited stores starts at least this long after the run did
 PATIENT = False       # True during the come-back pass: wait and retry on 429 instead of moving on
@@ -518,23 +520,6 @@ def usd_rates(previous):
     return {**FALLBACK_RATES, **(previous.get("rates") or {})}
 
 
-# ---------------------------------------------------------------- price history
-
-# Stores that quote converted prices drift a little with exchange rates every day.
-# A move smaller than this share of the price is treated as the same price, not a change.
-NOISE = 0.03
-
-
-def record_price(h, day, price):
-    """Add a price reading to h, a list of [day, price] points, one per real price change."""
-    if h and h[-1][0] == day:
-        h.pop()                              # one point per day: the latest reading wins
-    if h and abs(price - h[-1][1]) < NOISE * h[-1][1]:
-        h[-1][1] = price                     # same price level: keep it current, add no point
-    else:
-        h.append([day, price])
-
-
 # ---------------------------------------------------------------- main
 
 def main():
@@ -553,12 +538,11 @@ def main():
     DELAY = settings.get("delay_seconds", 1.0)
     stores = {s["host"]: s for s in cfg["stores"]}
 
-    state_path = os.path.join(ROOT, "data", "state.json")
     out_path = os.path.join(ROOT, "docs", "data.json")
-    state = load_json(state_path, {})
+    state = history.load_state()                # host -> everything tracked about that store's products
     previous = load_json(out_path, {"items": []})
-    fetched = state.get("fetched", {})          # host -> when it last refreshed without errors (UTC, to the minute)
     NOW = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="minutes")
+    T = NOW[:16]                                # the time written into the tracking files (UTC, to the minute)
 
     # ---- sort wishlist URLs by store
     wish_products, wish_pages = {}, {}
@@ -596,33 +580,49 @@ def main():
             cur["tags"].append(tag)
 
     def fetch_store(host):
-        """Everything wanted from one store: (item, tag) pairs, errors, and how many items qualified.
+        """Everything wanted from one store: (item, tag) pairs, errors, how many items qualified, a reading of
+        every product in its catalogue (id -> price, percent off, in stock) and whether that is the whole catalogue.
 
         Stores are fetched on separate threads; requests to any one store stay
         sequential and spaced out.
         """
         store, found, errors, listed = stores[host], [], [], []
+        readings, whole = {}, False
+        known = state.get(host, {}).get("products", {})
         wanted = set(wish_products.get(host, set()))
         print(f"{host} ...", flush=True)
         try:
             if store["platform"] == "shopify":
                 if store.get("browse") or wanted:
-                    store["currency"] = served_currency(host) or store.get("currency", "USD")
+                    # if the store won't say this time, assume the currency it used last time
+                    store["currency"] = served_currency(host) or state.get(host, {}).get("cur") \
+                        or store.get("currency", "USD")
+                    if store["currency"] != state.get(host, {}).get("cur"):
+                        known = {}               # prices tracked in another currency can't be compared
                 if store.get("browse"):
                     # "collections": ["visvim", ...] reads only those brand collections. It's for big
                     # retailers that rate-limit a full catalog read but stock a few brands worth tracking.
-                    seen = set()
+                    seen, whole = set(), not store.get("collections")
                     for c in store.get("collections") or [None]:
                         path = f"/collections/{c}" if c else ""
                         # "all": true lists the store's whole in-stock range, not only its discounts;
                         # "all": ["visvim"] does that for just those collections.
                         full = store.get("all") is True or c in (store.get("all") or [])
                         try:
-                            for p in shopify_feed(host, path, max_pages):
+                            for n, p in enumerate(shopify_feed(host, path, max_pages), 1):
+                                if n == max_pages * 250:
+                                    whole = False            # the page cap cut the catalogue short
                                 it = shopify_item(host, p)
                                 if not it or p.get("handle") in seen:
                                     continue
                                 seen.add(p.get("handle"))
+                                readings[it["id"]] = (it["price"], it["off"], it["avail"])
+                                # A quiet price cut: the store shows no "was" price, but the price is well under
+                                # the highest one tracked here.
+                                high = max((pt[1] for pt in known.get(it["id"], {}).get("h", [])), default=0)
+                                if high and it["off"] < min_off and it["price"] <= high * (1 - min_off / 100):
+                                    it["was"], it["tracked_drop"] = high, True
+                                    it["off"] = round((high - it["price"]) / high * 100)
                                 if p.get("handle") in wanted:
                                     found.append((it, "wish"))
                                     wanted.discard(p.get("handle"))
@@ -656,12 +656,13 @@ def main():
                 found.append((link_item(host, url), "wish"))
         except Exception as e:  # never let one store take the whole build down
             errors.append(f"unexpected: {e}")
-        return found, errors, len(listed)
+        return found, errors, len(listed), readings, whole
 
     hosts = list(stores)
     if stalest is not None:
         # never-fetched stores sort first (""), then the oldest refresh
-        feeds = sorted((h for h in hosts if stores[h]["platform"] != "link"), key=lambda h: fetched.get(h, ""))
+        feeds = sorted((h for h in hosts if stores[h]["platform"] != "link"),
+                       key=lambda h: state.get(h, {}).get("fetched", ""))
         chosen = set(feeds[:stalest]) | {h for h in hosts if stores[h]["platform"] == "link"}
         hosts = [h for h in hosts if h in chosen]
         print(f"refreshing the {min(stalest, len(feeds))} stores updated longest ago; the other {len(feeds) - min(stalest, len(feeds))} keep their items", flush=True)
@@ -674,7 +675,7 @@ def main():
     # running it. Come back to those stores once the rest are done (and at least COME_BACK seconds after the
     # run began), and only then wait and retry on a 429, a few stores at a time. Stores still refused fall back
     # to their items from the last run.
-    limited = [n for n, (_, errors, _) in enumerate(results) if any("429" in e for e in errors)]
+    limited = [n for n, r in enumerate(results) if any("429" in e for e in r[1])]
     if limited:
         pause = max(0, COME_BACK - (time.time() - started))
         print(f"{len(limited)} stores were rate-limited (HTTP 429); coming back to them in {pause:.0f} s", flush=True)
@@ -697,12 +698,14 @@ def main():
             if host in old_status:
                 status.append(old_status[host])
             continue
-        found, errors, qualified = done[host]
-        if not errors:
-            fetched[host] = NOW
+        found, errors, qualified, readings, whole = done[host]
         name, before = store.get("name", host), len(items)
         for item, tag in found:
             add(item, tag)
+            if item and item.get("price") is not None:     # followed items read one at a time are tracked too
+                readings.setdefault(item["id"], (item["price"], item["off"], item["avail"]))
+        if readings or store["platform"] != "link":
+            history.track(state.setdefault(host, {}), readings, T, min_off, store.get("currency", "USD"), errors, whole)
 
         # If a store failed completely, keep what we showed last time.
         got = len(items) - before
@@ -717,8 +720,8 @@ def main():
                            "qualified": max(qualified, len(items) - before), "errors": errors[:5]})
 
     # ---- decorate: store info, category, sizes, US dollar price, price history
-    prices = state.get("prices", {})
     rates = usd_rates(previous)
+    wide = {host: history.storewide(state[host]) for host in done if host in state}
     for it in items.values():
         s = stores.get(it["store"], {})
         it["store_name"] = s.get("name", it["store"])
@@ -750,30 +753,34 @@ def main():
                 it["usd"] = round(it["price"] / rates[it["cur"]], 2)
         if old:
             continue
-        # Price history: one record per item, a new point only when the price really changes.
-        rec = prices.setdefault(it["id"], {"first": TODAY, "h": []})
-        rec["last"], h, price = TODAY, rec["h"], it.get("price")
-        if price is not None:
-            record_price(h, TODAY, price)
-            del h[:-30]
-        it["first_seen"] = rec["first"]
-        it.pop("hist", None)
-        if price is not None and len(h) > 1:
-            it["hist"] = h[-12:]
-            high = max(p for _, p in h)
+        # What the tracking file says about it: when it appeared, its price changes.
+        st = state.get(it["store"], {})
+        h = st.get("products", {}).get(it["id"], {}).get("h")
+        price = it.get("price")
+        if not h or price is None:
+            continue
+        points = history.price_points(h)
+        if len(points) > 1:
+            it["hist"] = points[-12:]
+            high = max(p for _, p in points)
             if not it["off"] and high > price:
                 it["was"], it["tracked_drop"] = high, True
                 it["off"] = round((high - price) / high * 100)
+            pct = history.in_storewide(h, wide.get(it["store"], []))
+            if pct:
+                it["storewide"] = pct            # its latest price change was the whole store's, not this item's
+        # "New" on the page means it joined the list in the last few days. What a store's first read finds had
+        # been there for an unknown time already, so it gets no date.
+        move = history.last_move(h) if it.get("tracked_drop") else None    # a quiet cut is new when the price fell
+        began = move[0] if move else history.since(h, min_off)
+        if began > st["since"]:
+            it["first_seen"] = began[:10]
 
-    # Forget items that have not been seen for 90 days.
-    cutoff = (datetime.date.today() - datetime.timedelta(days=90)).isoformat()
-    lines = [f"{json.dumps(k)}:{json.dumps(v, separators=(',', ':'))}"
-             for k, v in sorted(prices.items()) if v.get("last", TODAY) >= cutoff]
-    os.makedirs(os.path.dirname(state_path), exist_ok=True)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(state_path, "w", encoding="utf-8") as f:   # one item per line keeps git diffs small
-        f.write('{"prices":{\n' + ",\n".join(lines) + "\n},\n" +
-                '"fetched":' + json.dumps(dict(sorted(fetched.items())), separators=(",", ":")) + "}\n")
+    for host in [h for h in state if h not in stores]:      # a store taken out of stores.json is forgotten
+        del state[host]
+    history.save_state(state)
+    history.write_metrics(state, cfg, NOW)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({
             "generated": NOW,

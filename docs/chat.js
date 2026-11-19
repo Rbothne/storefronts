@@ -122,6 +122,8 @@ function brief(i) {
   if (prefs.itemCats[i.id]) o.my_categories = prefs.itemCats[i.id];
   if (i.hist) { o.price_history = i.hist; if (newLow(i)) o.at_lowest_tracked_price = true; if (newHigh(i)) o.at_highest_tracked_price = true; }
   if (i.avail === false) o.sold_out = true;
+  if (i.tracked_drop) o.discount_is_from_tracked_price = true;   // the store shows no original price
+  if (i.storewide) o.store_wide_price_change_percent = i.storewide;   // its latest price move was the whole store's
   o.first_seen = i.first_seen; o.url = i.url;
   return o;
 }

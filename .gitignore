@@ -4,3 +4,7 @@ __pycache__/
 # Built by the workflow and kept on the "data" branch (one commit, replaced on every update)
 data/state.json
 docs/data.json
+
+# (also built by the workflow)
+data/state/
+docs/metrics.json
