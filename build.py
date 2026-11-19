@@ -28,7 +28,10 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
 DELAY = 1.0
 COME_BACK = 180       # the come-back pass over rate-limited stores starts at least this long after the run did
+COME_BACK_FOR = 600   # ... and waits on refusals for this long at most; after that a refused store keeps its old items
 PATIENT = False       # True during the come-back pass: wait and retry on 429 instead of moving on
+PATIENT_UNTIL = 0     # when that patience runs out (a time.time() value)
+COUNT = {"requests": 0, "refused": 0}   # this run's requests, and how many were answered 429 (too many requests)
 
 
 # ---------------------------------------------------------------- fetching
@@ -39,8 +42,11 @@ def get(url, timeout=25, tries=3):
     A server error is retried after a wait. A 429 (too many requests) is not, on the first pass: the store is
     left for later and the run moves on to other stores (see main()). On the come-back pass (PATIENT) a 429 is
     retried after the server's Retry-After when it gives one (capped at a minute), otherwise 15 s and then 45 s.
+    That patience has a time limit (COME_BACK_FOR): a store refusing page after page would otherwise hold the
+    run for an hour.
     """
     for attempt in range(tries):
+        COUNT["requests"] += 1
         req = urllib.request.Request(url, headers={
             "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9",
             "Accept": "application/json,text/html;q=0.9,*/*;q=0.8"})
@@ -52,7 +58,9 @@ def get(url, timeout=25, tries=3):
                 return r.status, body
         except urllib.error.HTTPError as e:
             status = e.code
-            if status in (429, 500, 502, 503, 504) and attempt + 1 < tries and (status != 429 or PATIENT):
+            COUNT["refused"] += status == 429
+            patient = PATIENT and time.time() < PATIENT_UNTIL
+            if status in (429, 500, 502, 503, 504) and attempt + 1 < tries and (status != 429 or patient):
                 wait = (15, 45)[min(attempt, 1)]
                 try:
                     wait = min(60, max(wait, int(e.headers.get("Retry-After", ""))))
@@ -599,7 +607,8 @@ def main():
     """Build docs/data.json. `--stalest N` refreshes only the N stores fetched longest ago (link-only stores, which
     cost nothing, always run); every other store keeps its items and status from the last run. The hourly runs
     use it; the daily full run, and runs after a change to the stores or this script, refresh everything."""
-    global DELAY, PATIENT
+    global DELAY, PATIENT, PATIENT_UNTIL
+    began = time.time()
     stalest = int(sys.argv[sys.argv.index("--stalest") + 1]) if "--stalest" in sys.argv else None
     cfg = load_json(os.path.join(ROOT, "stores.json"), None)
     if not cfg:
@@ -750,19 +759,26 @@ def main():
     # A store that answers 429 (too many requests) is skipped on the first pass, so the run moves on to the
     # others; Shopify sometimes rate-limits nearly a whole run, apparently by the shared address of the machine
     # running it. Come back to those stores once the rest are done (and at least COME_BACK seconds after the
-    # run began), and only then wait and retry on a 429, a few stores at a time. Stores still refused fall back
-    # to their items from the last run.
+    # run began), and only then wait and retry on a 429, a few stores at a time, for COME_BACK_FOR seconds at
+    # most. Stores still refused fall back to their items from the last run.
     limited = [n for n, r in enumerate(results) if any("429" in e for e in r[1])]
-    if limited:
+    still = len(limited)
+    if len(limited) > sum(1 for h in hosts if stores[h]["platform"] != "link") / 2:
+        # Most stores refused at once: it is this machine's address being turned away, not the stores' own limits.
+        # Waiting on each of them helps nothing (it once held a run for an hour). They keep their old items, and
+        # the next run tries again.
+        print(f"{len(limited)} stores were rate-limited (HTTP 429): this machine is being refused; leaving them to the next run", flush=True)
+    elif limited:
         pause = max(0, COME_BACK - (time.time() - started))
         print(f"{len(limited)} stores were rate-limited (HTTP 429); coming back to them in {pause:.0f} s", flush=True)
         time.sleep(pause)
-        PATIENT = True
+        PATIENT, PATIENT_UNTIL = True, time.time() + COME_BACK_FOR
         with concurrent.futures.ThreadPoolExecutor(3) as pool:
             for n, again in zip(limited, pool.map(fetch_store, [hosts[n] for n in limited])):
                 results[n] = again
         PATIENT = False
-        print(f"after coming back, {sum(any('429' in e for e in results[n][1]) for n in limited)} still rate-limited", flush=True)
+        still = sum(any("429" in e for e in results[n][1]) for n in limited)
+        print(f"after coming back, {still} still rate-limited", flush=True)
 
     done = dict(zip(hosts, results))
     catalog = {}                               # host -> its in-stock items that are not on the list, for stores read cleanly
@@ -875,9 +891,14 @@ def main():
     for host in [h for h in state if h not in stores]:      # a store taken out of stores.json is forgotten
         del state[host]
     history.save_state(state)
-    history.write_metrics(state, cfg, NOW)
     write_catalog(catalog, stores)
     write_brand_files()
+    # a line about this run for the metrics page: the only place its speed and its refusals can be seen from outside
+    run = {"t": T, "every_store": stalest is None, "stores": sum(1 for h in hosts if stores[h]["platform"] != "link"),
+           "minutes": round((time.time() - began) / 60, 1), "requests": COUNT["requests"], "refused": COUNT["refused"],
+           "limited": len(limited), "still_limited": still, "failed": sum(1 for s in status if not s["ok"]),
+           "lanes": settings.get("workers", 6)}
+    history.write_metrics(state, cfg, NOW, run)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({
             "generated": NOW,

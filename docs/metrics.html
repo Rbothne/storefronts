@@ -86,6 +86,10 @@
     a repricing or a currency swing, not a sale. Items caught in one are left out of the Price change sort.</p>
   <ul id="wide"></ul>
 
+  <h2>Updates</h2>
+  <p class="sub" id="runsnote"></p>
+  <div class="scroll"><table id="runs"></table></div>
+
   <h2>Reading these numbers</h2>
   <ul class="sub">
     <li><b>Typical discount</b> is the middle one: half the store's sale items are marked down more, half less.</li>
@@ -259,6 +263,23 @@ function show(m) {
     const tr = el("tr"); tr.append(cell(day(d)), cell(num(n)), cell(num(stock)), cell(num(sale)), cell(pct(stock ? sale / stock : null))); rows.push(tr);
   }
   $("market").replaceChildren(...rows);
+  // the build's own log: how often it ran, how long it took, how many requests stores refused
+  const runs = (m.runs || []).slice().reverse(), day1 = runs.filter(r => Date.now() - stamp(r.t) < 864e5);
+  $("runsnote").textContent = runs.length
+    ? day1.length + " updates in the last 24 hours, reading " + num(day1.reduce((a, r) => a + r.stores, 0)) + " stores in all; " +
+      num(day1.reduce((a, r) => a + r.refused, 0)) + " of " + num(day1.reduce((a, r) => a + r.requests, 0)) + " requests were refused as too many."
+    : "No update has been logged yet.";
+  const rhead = el("tr"), rrows = [rhead];
+  for (const h of ["When", "Stores read", "Took", "Requests", "Refused (too many)", "Stores refused", "Still refused after retry", "Stores failing", "Read at once"]) rhead.append(el("th", null, h));
+  for (const r of runs.slice(0, 40)) {
+    const tr = el("tr");
+    tr.append(cell(stamp(r.t).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })),
+      cell(num(r.stores) + (r.every_store ? " (all)" : "")), cell(r.minutes + " min"), cell(num(r.requests)),
+      cell(num(r.refused), "", r.refused ? "bad" : "none"), cell(num(r.limited), "", r.limited ? "" : "none"),
+      cell(num(r.still_limited), "", r.still_limited ? "bad" : "none"), cell(num(r.failed), "", r.failed ? "" : "none"), cell(num(r.lanes)));
+    rrows.push(tr);
+  }
+  $("runs").replaceChildren(...rrows);
   lifeTable($("bands"), [...Object.entries(m.bands), ["Every discount", m]], m.horizons, "Discount");
   stores();
   $("wide").replaceChildren(...(m.storewide.length ? m.storewide.map(e =>

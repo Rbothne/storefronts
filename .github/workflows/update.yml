@@ -1,10 +1,19 @@
 name: Update listings
 
 on:
+  # Each run starts the next one (the last step), so the site updates every 20 minutes without relying on these
+  # timers: GitHub starts scheduled runs late or not at all (most of the hourly ones never ran). The timers stay
+  # as a way back in if the chain of runs ever breaks.
   schedule:
     - cron: "17 11 * * *"       # once a day (UTC, about 6:17 am Eastern): refresh every store
-    - cron: "37 * * * *"        # every hour: refresh the 50 stores updated longest ago
-  workflow_dispatch:            # "Run workflow" by hand: refresh every store
+    - cron: "37 * * * *"        # every hour: a cycle run, as below
+  workflow_dispatch:            # "Run workflow" by hand refreshes every store; the runs start each other with "cycle"
+    inputs:
+      mode:
+        description: "full: refresh every store. cycle: refresh the stores read longest ago."
+        type: choice
+        options: [full, cycle]
+        default: full
   push:                         # a change to the page republishes it; a change to the stores or the build refreshes everything
     branches: [main]
     paths: ["docs/**", "build.py", "history.py", "stores.json", ".github/workflows/update.yml"]
@@ -13,6 +22,7 @@ permissions:
   contents: write               # to replace the data branch
   pages: write                  # to publish the site
   id-token: write               # required by the Pages deploy action
+  actions: write                # to start the next run
 
 concurrency:                    # one run at a time, so two never race on the data branch
   group: update-listings
@@ -28,10 +38,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # full: every store. hourly: the stores updated longest ago (each store comes round every few hours, and short
-      # runs are less likely to be rate-limited). publish: a page change, so no fetching at all.
+      # full: every store. cycle: the 95 stores read longest ago, so with a run every 20 minutes each store comes
+      # round about once an hour. publish: a page change, so no fetching at all.
       - name: Decide what to run
         run: |
+          echo "STARTED=$(date +%s)" >> "$GITHUB_ENV"
           python3 - >> "$GITHUB_ENV" <<'EOF'
           import json, os, subprocess
           event, e = os.environ["GITHUB_EVENT_NAME"], json.load(open(os.environ["GITHUB_EVENT_PATH"]))
@@ -46,7 +57,9 @@ jobs:
               rebuild = {"build.py", "history.py", "stores.json", ".github/workflows/update.yml"}
               mode = "full" if changed & rebuild else "publish"
           elif event == "schedule" and e.get("schedule") == "37 * * * *":
-              mode = "hourly"
+              mode = "cycle"
+          elif event == "workflow_dispatch" and (e.get("inputs") or {}).get("mode") == "cycle":
+              mode = "cycle"
           else:
               mode = "full"
           print(f"MODE={mode}")
@@ -73,7 +86,7 @@ jobs:
         if: env.REBUILD == 'true'
         run: |
           echo "mode: $MODE"
-          if [ "$MODE" = hourly ]; then python3 build.py --stalest 50; else python3 build.py; fi
+          if [ "$MODE" = cycle ]; then python3 build.py --stalest 95; else python3 build.py; fi
 
       # The page's per-brand files (docs/brands/) are made from the catalogue. A build makes them itself; when only
       # the page changed, make them here so the published site still has them.
@@ -124,3 +137,26 @@ jobs:
 
       - id: deploy
         uses: actions/deploy-pages@v4
+
+      # Start the next run 20 minutes after this one began, as a "cycle" run. If another run is already waiting
+      # (a push, a timer that did fire), stop at once and let that one carry on the chain: only one waits at a
+      # time. This runs even when an earlier step failed, so one bad run doesn't end the updates. Cancelling a
+      # run does end them, until a timer or a push starts a run again; to stop updates for good, disable this
+      # workflow in the repository's Actions tab.
+      - name: Start the next run
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          STARTED=${STARTED:-$(date +%s)}   # if the run failed before noting its start, count the wait from now
+          waiting() {   # how many runs of this workflow are queued behind this one (0 if the question fails)
+            n=$(gh run list --workflow update.yml --limit 30 --json status \
+                  --jq '[.[] | select(.status != "completed" and .status != "in_progress")] | length' 2>/dev/null) || n=0
+            echo "${n:-0}"
+          }
+          while [ "$(date +%s)" -lt $(( STARTED + 1200 )) ]; do
+            if [ "$(waiting)" != 0 ]; then echo "another run is waiting; it carries on from here"; exit 0; fi
+            sleep 30
+          done
+          if [ "$(waiting)" != 0 ]; then echo "another run is waiting; it carries on from here"; exit 0; fi
+          gh workflow run update.yml --ref main -f mode=cycle

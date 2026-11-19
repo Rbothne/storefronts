@@ -423,11 +423,18 @@ def metrics(state, names, min_off, now):
             "stores": stores}
 
 
-def write_metrics(state, cfg, now):
+def write_metrics(state, cfg, now, run=None):
+    """Write docs/metrics.json. `run` is the build's line about itself; the last 300 are kept with the metrics."""
     names = {s["host"]: s.get("name", s["host"]) for s in cfg["stores"]}
+    try:
+        with open(METRICS_PATH, encoding="utf-8") as f:
+            runs = json.load(f).get("runs", [])
+    except (OSError, ValueError):
+        runs = []
+    out = metrics(state, names, cfg.get("settings", {}).get("min_discount", 20), now)
+    out["runs"] = (runs + [run] if run else runs)[-300:]
     with open(METRICS_PATH, "w", encoding="utf-8") as f:
-        json.dump(metrics(state, names, cfg.get("settings", {}).get("min_discount", 20), now), f,
-                  ensure_ascii=False, separators=(",", ":"))
+        json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
 
 
 if __name__ == "__main__":
