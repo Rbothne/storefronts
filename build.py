@@ -533,6 +533,66 @@ def usd_rates(previous):
     return {**FALLBACK_RATES, **(previous.get("rates") or {})}
 
 
+# ---------------------------------------------------------------- catalogue
+
+# data.json holds what is on the list (sale items, and a few stores' full range). Everything else in stock goes
+# in a catalogue: data/catalog/<store>.json keeps it per store between runs, and docs/brands/<n>.json regroups
+# it by brand for the page, which fetches only the files of the brands you follow. A brand's file number is
+# worked out from its name the same way here and in the page (bucket() in docs/index.html).
+CATALOG_DIR = os.path.join(ROOT, "data", "catalog")
+BRANDS_DIR = os.path.join(ROOT, "docs", "brands")
+BRAND_FILES = 512
+
+
+def brand_key(name):
+    """A brand name reduced to its letters and digits (the page's brandKey does the same)."""
+    return re.sub(r"[^a-z0-9]", "", re.sub(r"\b(wo)?mens\b", "", (name or "").lower(), flags=re.A))
+
+
+def brand_file(key):
+    n = 0
+    for ch in key:
+        n = (n * 31 + ord(ch)) % BRAND_FILES
+    return n
+
+
+def write_lines(path, items):
+    """A JSON list, one item per line."""
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("[\n" + ",\n".join(json.dumps(it, ensure_ascii=False, separators=(",", ":")) for it in items) + "\n]\n")
+
+
+def write_catalog(catalog, stores):
+    """Replace the catalogue file of every store read cleanly this run; other stores keep theirs."""
+    os.makedirs(CATALOG_DIR, exist_ok=True)
+    name = lambda host: re.sub(r"[^\w.-]", "_", host) + ".json"
+    for host, found in catalog.items():
+        # The page fills in what every catalogue item shares (in stock, no tags, usually no discount) and what
+        # it can work out (a Shopify product's address from its id, a dollar price's value in dollars): fill()
+        # in docs/index.html. Across 200,000 items that is a quarter of the size.
+        slim = [{k: v for k, v in it.items()
+                 if k not in ("tags", "avail") and v not in (None, 0, []) and not (k == "usd" and it["cur"] == "USD")
+                 and not (k == "url" and v == "https://" + it["id"].replace("/", "/products/", 1))} for it in found]
+        write_lines(os.path.join(CATALOG_DIR, name(host)), sorted(slim, key=lambda it: it["id"]))
+    keep = {name(host) for host in stores}
+    for file in os.listdir(CATALOG_DIR):
+        if file not in keep:
+            os.remove(os.path.join(CATALOG_DIR, file))
+
+
+def write_brand_files():
+    """Regroup every store's catalogue by brand into docs/brands/."""
+    files = [[] for _ in range(BRAND_FILES)]
+    for file in sorted(os.listdir(CATALOG_DIR)) if os.path.isdir(CATALOG_DIR) else []:
+        for it in load_json(os.path.join(CATALOG_DIR, file), []):
+            key = brand_key(it.get("brand") or it["store_name"])
+            if key:
+                files[brand_file(key)].append(it)
+    os.makedirs(BRANDS_DIR, exist_ok=True)
+    for n, found in enumerate(files):
+        write_lines(os.path.join(BRANDS_DIR, f"{n}.json"), found)
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -594,12 +654,13 @@ def main():
 
     def fetch_store(host):
         """Everything wanted from one store: (item, tag) pairs, errors, how many items qualified, a reading of
-        every product in its catalogue (see history.track) and whether that is the whole catalogue.
+        every product in its catalogue (see history.track), whether that is the whole catalogue, and the
+        in-stock items that did not qualify for the list (they go in the store's catalogue file).
 
         Stores are fetched on separate threads; requests to any one store stay
         sequential and spaced out.
         """
-        store, found, errors, listed = stores[host], [], [], []
+        store, found, errors, listed, rest = stores[host], [], [], [], []
         readings, whole = {}, False
         known = state.get(host, {}).get("products", {})
         wanted = set(wish_products.get(host, set()))
@@ -629,10 +690,10 @@ def main():
                                 if not it or p.get("handle") in seen:
                                     continue
                                 seen.add(p.get("handle"))
-                                group, kind = group_kind(store, it["ptype"], it["title"])
+                                it["group"], it["kind"] = group_kind(store, it["ptype"], it["title"])
                                 readings[it["id"]] = {"price": it["price"], "off": it["off"], "avail": it["avail"],
                                                       "brand": store.get("brand") or it["brand"],
-                                                      "kind": kind or group, "published": it["published"]}
+                                                      "kind": it["kind"] or it["group"], "published": it["published"]}
                                 # A quiet price cut: the store shows no "was" price, but the price is well under
                                 # the highest one tracked here.
                                 high = max((pt[1] for pt in known.get(it["id"], {}).get("h", [])), default=0)
@@ -642,8 +703,8 @@ def main():
                                 if p.get("handle") in wanted:
                                     found.append((it, "wish"))
                                     wanted.discard(p.get("handle"))
-                                if it["avail"] and (it["off"] >= min_off or full):
-                                    listed.append(it)
+                                if it["avail"]:
+                                    (listed if it["off"] >= min_off or full else rest).append(it)
                         except Exception as e:
                             errors.append(f"catalog{path}: {e}")
                     # A few stores would swamp the rest, so keep each store's deepest discounts.
@@ -672,7 +733,7 @@ def main():
                 found.append((link_item(host, url), "wish"))
         except Exception as e:  # never let one store take the whole build down
             errors.append(f"unexpected: {e}")
-        return found, errors, len(listed), readings, whole
+        return found, errors, len(listed), readings, whole, rest
 
     hosts = list(stores)
     if stalest is not None:
@@ -704,6 +765,7 @@ def main():
         print(f"after coming back, {sum(any('429' in e for e in results[n][1]) for n in limited)} still rate-limited", flush=True)
 
     done = dict(zip(hosts, results))
+    catalog = {}                               # host -> its in-stock items that are not on the list, for stores read cleanly
     old_status = {s["host"]: s for s in previous.get("status", [])}
     for host, store in stores.items():
         if host not in done:                   # not refreshed this run: keep last run's items and status as they were
@@ -714,12 +776,14 @@ def main():
             if host in old_status:
                 status.append(old_status[host])
             continue
-        found, errors, qualified, readings, whole = done[host]
+        found, errors, qualified, readings, whole, rest = done[host]
         name, before = store.get("name", host), len(items)
         for item, tag in found:
             add(item, tag)
             if item and item.get("price") is not None:     # followed items read one at a time are tracked too
                 readings.setdefault(item["id"], {"price": item["price"], "off": item["off"], "avail": item["avail"]})
+        if not errors and store.get("browse"):
+            catalog[host] = [it for it in rest if it["id"] not in items]
         if readings or store["platform"] != "link":
             history.track(state.setdefault(host, {}), readings, T, min_off, store.get("currency", "USD"), errors, whole)
 
@@ -738,7 +802,8 @@ def main():
     # ---- decorate: store info, category, sizes, US dollar price, price history
     rates = usd_rates(previous)
     wide = {host: history.storewide(state[host]) for host in done if host in state}
-    for it in items.values():
+
+    def decorate(it):
         s = stores.get(it["store"], {})
         it["store_name"] = s.get("name", it["store"])
         if s.get("brand"):                       # brand-run stores whose own "vendor" field is not the brand
@@ -746,7 +811,7 @@ def main():
         ptype = it.pop("ptype", "")
         old = it.get("stale") or it.pop("carried", False)   # reused from the last run: keep what it had
         it.pop("published", None)
-        if not old:
+        if not old and "kind" not in it:         # items from a store's feed were sorted as they were read
             it["group"], it["kind"] = group_kind(s, ptype, it["title"])
         it["cur"] = it.get("cur") or s.get("currency", "USD")
         if not it.get("g") and s.get("fits"):    # a women's or men's boutique: unlabelled items are that
@@ -765,13 +830,13 @@ def main():
             if it.get("price") is not None and rates.get(it["cur"]):
                 it["usd"] = round(it["price"] / rates[it["cur"]], 2)
         if old:
-            continue
+            return
         # What the tracking file says about it: when it appeared, its price changes.
         st = state.get(it["store"], {})
-        h = st.get("products", {}).get(it["id"], {}).get("h")
-        price = it.get("price")
+        rec = st.get("products", {}).get(it["id"], {})
+        h, price = rec.get("h"), it.get("price")
         if not h or price is None:
-            continue
+            return
         points = history.price_points(h)
         if len(points) > 1:
             it["hist"] = points[-12:]
@@ -782,18 +847,37 @@ def main():
             pct = history.in_storewide(h, wide.get(it["store"], []))
             if pct:
                 it["storewide"] = pct            # its latest price change was the whole store's, not this item's
-        # "New" on the page means it joined the list in the last few days. What a store's first read finds had
-        # been there for an unknown time already, so it gets no date.
+        if it["off"] >= min_off and it.get("was") and not it.get("tracked_drop"):
+            check = history.was_check(h, it["was"], min_off)
+            if check:
+                it["pre"] = check                # what was seen before the sale, to judge the "was" price
+        back = history.back_in_stock(h)
+        if back and history.days(back, T) <= 14:
+            it["back"] = back[:10]
+        # "New" on the page means new in the last few days: a sale item by when its sale began, a full-price item
+        # by when the store published it. What a store's first read finds on sale had been so for an unknown
+        # time already, so it gets no date.
+        if it["off"] < min_off and rec.get("p"):
+            it["first_seen"] = rec["p"]
+            return
         move = history.last_move(h) if it.get("tracked_drop") else None    # a quiet cut is new when the price fell
         began = move[0] if move else history.since(h, min_off)
         if began > st["since"]:
             it["first_seen"] = began[:10]
+
+    for it in items.values():
+        decorate(it)
+    for found in catalog.values():
+        for it in found:
+            decorate(it)
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     for host in [h for h in state if h not in stores]:      # a store taken out of stores.json is forgotten
         del state[host]
     history.save_state(state)
     history.write_metrics(state, cfg, NOW)
+    write_catalog(catalog, stores)
+    write_brand_files()
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({
             "generated": NOW,
@@ -808,4 +892,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--brands" in sys.argv:          # only regroup the catalogue for the page (a page change is being published)
+        write_brand_files()
+    else:
+        main()

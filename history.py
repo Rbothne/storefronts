@@ -11,6 +11,7 @@ A store's file looks like this (times are UTC, to the minute):
     {"since": first read, "fetched": last clean read, "partial": true if only part of its catalogue is read,
      "cur": currency of the prices, "reads": 12, "fails": 1, "error": the latest failure (absent after a clean read),
      "log": [[day, products, in stock, on sale, typical percent off], ...]   one line per day
+     "events": [[day, "start" or "end", products, typical percent off], ...]  sales starting and ending, kept for good
      "products": {id: {"f": first seen, "h": [[time, price, percent off, in stock], ...], "x": noticed gone,
                        "b": brand, "k": kind ("tops", "footwear", "kitchen", ...), "p": day the store published it,
                        "n": sizes offered, "z": [[time, [sizes in stock]], ...] while it is on sale}}}
@@ -137,11 +138,17 @@ def track(st, readings, now, min_off, cur, errors, whole):
         for rec in products.values():
             rec["h"] = []
     st["cur"] = cur
+    began, ended = [], 0                     # products whose sale started or ended between the last read and this one
     for pid, r in readings.items():
         if not r["price"]:
             continue
         rec = products.setdefault(pid, {"f": now, "h": []})
+        seen, was_on = bool(rec["h"]), bool(rec["h"]) and on_sale(rec["h"][-1], min_off)
         record(rec, now, r["price"], r["off"], 0 if r["avail"] is False else 1)
+        if seen and not was_on and on_sale(rec["h"][-1], min_off):
+            began.append(r["off"])
+        elif was_on and rec["h"][-1][3] and not on_sale(rec["h"][-1], min_off):
+            ended += 1
         for key, name in (("b", "brand"), ("k", "kind"), ("p", "published")):
             if r.get(name) and (key != "p" or "p" not in rec):     # the first publish day seen is kept
                 rec[key] = r[name]
@@ -162,6 +169,18 @@ def track(st, readings, now, min_off, cur, errors, whole):
         log.pop()
     log.append([now[:10], len(readings), len(live), len(sale), round(statistics.median(sale)) if sale else 0])
     del log[:-400]
+    # Many markdowns appearing (or ending) in one read is a sale starting (or ending). Product histories are
+    # trimmed and forgotten, so the event is written down here, where it stays.
+    floor = max(20, 0.05 * len(live))
+    for kind, n, typical in (("start", len(began), round(statistics.median(began)) if began else 0), ("end", ended, 0)):
+        if n >= floor:
+            events = st.setdefault("events", [])
+            same = next((e for e in events if e[0] == now[:10] and e[1] == kind), None)
+            if same:                         # a second read the same day found more of it
+                same[2], same[3] = same[2] + n, max(same[3], typical)
+            else:
+                events.append([now[:10], kind, n, typical])
+            del events[:-200]
 
 
 def record_sizes(rec, now, sizes, offered):
@@ -209,6 +228,36 @@ def last_move(h):
         if abs(b[1] - a[1]) >= NOISE * a[1]:
             return b[0], round((b[1] / a[1] - 1) * 100)
     return None
+
+
+def sale_start(h, min_off):
+    """Index of the point where the current sale began, or None if the product is not on sale now."""
+    if not on_sale(h[-1], min_off):
+        return None
+    n = len(h) - 1
+    while n and on_sale(h[n - 1], min_off):
+        n -= 1
+    return n
+
+
+def was_check(h, was, min_off):
+    """For a product on sale now whose sale was seen starting: what was seen before it, to judge the "was" price.
+    {"watched": days tracked before the sale, "high": highest price in that time, "at": days spent at the
+    "was" price (within 5%, the room exchange-rate drift needs)}. None if it was already on sale when first seen."""
+    n = sale_start(h, min_off)
+    if not n:
+        return None
+    before = h[:n + 1]                       # the points before the sale, and the sale's first point to end the last of them
+    at = sum(days(a[0], b[0]) for a, b in zip(before, before[1:]) if a[1] >= 0.95 * was)
+    return {"watched": round(days(h[0][0], h[n][0])), "high": max(p[1] for p in h[:n]), "at": round(at)}
+
+
+def back_in_stock(h):
+    """When the product came back into stock, if it is in stock now and was out before that; else None."""
+    n = len(h) - 1
+    while n and h[n][3] and h[n - 1][3]:
+        n -= 1
+    return h[n][0] if n and h[n][3] and not h[n - 1][3] else None
 
 
 def storewide(st):
@@ -335,7 +384,8 @@ def by_band(found, min_off):
 
 def metrics(state, names, min_off, now):
     """Everything the metrics page shows."""
-    stores, everything, now_off, events = [], [], [], []
+    stores, everything, now_off, events, sales = [], [], [], [], []
+    market = collections.defaultdict(lambda: [0, 0, 0])      # day -> stores read, products in stock, on sale
     for host, st in sorted(state.items()):
         fetched = st.get("fetched") or st["since"]
         found = [(d, fetched) for rec in st["products"].values() for d in deals(rec, st, min_off)]
@@ -344,6 +394,12 @@ def metrics(state, names, min_off, now):
         sale = [p[2] for p in live if p[2] is not None and p[2] >= min_off]
         now_off += sale
         wide = storewide(st)
+        for day, kind, n, typical in st.get("events", []):
+            sales.append({"host": host, "name": names.get(host, host), "t": day, "kind": kind, "n": n, "typical": typical})
+        for day, _, stock, sale_n, _ in st.get("log", [])[-60:]:
+            market[day][0] += 1
+            market[day][1] += stock
+            market[day][2] += sale_n
         events += [{"host": host, "name": names.get(host, host), "of": len(st["products"]), **e} for e in wide]
         starts = [when(d["start"]).weekday() for d, _ in found if d["known"] and len(d["start"]) > 10]
         stores.append({
@@ -354,7 +410,7 @@ def metrics(state, names, min_off, now):
             "stock": len(live), "sale": len(sale), "typical": round(statistics.median(sale)) if sale else None,
             "log": st.get("log", [])[-90:],
             "weekday": [starts.count(n) for n in range(7)],
-            "storewide": wide,
+            "storewide": wide, "events": st.get("events", [])[-20:],
             **summarise(found), "bands": by_band(found, min_off)})
     return {"generated": now, "min_discount": min_off, "horizons": HORIZONS, "mature_days": MATURE,
             "since": min((s["since"] for s in stores), default=now),
@@ -362,6 +418,8 @@ def metrics(state, names, min_off, now):
             "sale": len(now_off), "typical": round(statistics.median(now_off)) if now_off else None,
             **summarise(everything), "bands": by_band(everything, min_off),
             "storewide": sorted(events, key=lambda e: e["t"], reverse=True)[:100],
+            "sales": sorted(sales, key=lambda e: e["t"], reverse=True)[:150],
+            "market": [[day, *market[day]] for day in sorted(market)],
             "stores": stores}
 
 

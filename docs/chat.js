@@ -40,7 +40,7 @@ Style: direct and conversational, like a knowledgeable friend. Lead with the ans
 const TOOLS = [
   {
     name: "search_site_items",
-    description: "Search the items currently listed on the site. Use this before recommending anything. Every filter is optional; combine them to narrow down. Returns the number of matches and the top results with price, discount, sizes in stock and a link. Stores and brands the person hid on the site are left out.",
+    description: "Search the items currently listed on the site. Use this before recommending anything. Every filter is optional; combine them to narrow down. Returns the number of matches and the top results with price, discount, sizes in stock and a link. Stores and brands the person hid on the site are left out. The site lists sale items; for the brands the person follows it also has the full-price range (those results have no discount), so set min_discount when they only want markdowns.",
     eager_input_streaming: true,
     input_schema: {
       type: "object",
@@ -123,6 +123,9 @@ function brief(i) {
   if (i.hist) { o.price_history = i.hist; if (newLow(i)) o.at_lowest_tracked_price = true; if (newHigh(i)) o.at_highest_tracked_price = true; }
   if (i.avail === false) o.sold_out = true;
   if (i.tracked_drop) o.discount_is_from_tracked_price = true;   // the store shows no original price
+  // what was tracked before the sale began: how long, the highest price, and the days spent at the "was" price
+  if (i.pre) o.before_this_sale = { days_watched: i.pre.watched, highest_price: i.pre.high, days_at_was_price: i.pre.at };
+  if (i.back) o.back_in_stock_since = i.back;
   if (i.storewide) o.store_wide_price_change_percent = i.storewide;   // its latest price move was the whole store's
   o.first_seen = i.first_seen; o.url = i.url;
   return o;
@@ -130,7 +133,7 @@ function brief(i) {
 function searchItems(a) {
   const words = (a.query || "").toLowerCase().split(/\s+/).filter(Boolean), has = (text, part) => !part || (text || "").toLowerCase().includes(part.toLowerCase());
   const gen = { men: "m", women: "w", kids: "k" }[a.fits] || "", brands = followedBrands(pool());
-  let list = DATA.items.filter(i => {
+  let list = [...DATA.items, ...extras()].filter(i => {
     if (ruledOut(i) || crowdedOut(i)) return false;
     const text = (i.title + " " + (i.brand || "") + " " + i.store_name + " " + i.group + " " + (i.kind || "")).toLowerCase();
     return words.every(w => text.includes(w)) &&

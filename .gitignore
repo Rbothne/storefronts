@@ -8,3 +8,5 @@ docs/data.json
 # (also built by the workflow)
 data/state/
 docs/metrics.json
+data/catalog/
+docs/brands/

@@ -52,6 +52,7 @@
   svg.trend { vertical-align: middle; overflow: visible; }
   svg.trend path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
   ul { margin: 6px 0; padding-left: 20px; }
+  #sales { margin-bottom: 12px; }
   li { margin: 2px 0; }
 </style>
 </head>
@@ -67,6 +68,13 @@
     start was seen are counted, and deals still running count for as long as they have been watched. A store is read
     every few hours, so anything shorter than that is missed.</p>
   <div class="scroll"><table id="bands"></table></div>
+
+  <h2>Sales starting and ending</h2>
+  <p class="sub">A store marking down many products between two reads is a sale starting; many going back to full
+    price is one ending. Sales run by a discount code or applied in the cart don't show in store feeds, so a store
+    with no markdowns may still be on sale.</p>
+  <ul id="sales"></ul>
+  <div class="scroll"><table id="market"></table></div>
 
   <h2>Stores</h2>
   <p class="sub">Select a store for its detail. Select a column heading to sort by it.</p>
@@ -189,6 +197,7 @@ function detail(s) {
   // weekdays mean nothing until a few weeks have gone by
   if (s.weekday.reduce((a, b) => a + b, 0) >= 50 && Date.now() - stamp(s.since) > 21 * 864e5)
     td.append(el("div", null, "New markdowns by weekday: " + ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, n) => d + " " + s.weekday[n]).join(" · ")));
+  for (const e of [...s.events].reverse()) td.append(el("div", null, day(e[0]) + ": " + saleText(e[1], e[2], e[3])));
   for (const e of s.storewide) td.append(el("div", null, "Store-wide price change on " + day(e.t) + ": " + (e.pct > 0 ? "+" : "") + e.pct + "% on " + num(e.n) + " products"));
   if (s.log.length) {
     td.append(el("b", null, "Day by day"));
@@ -229,13 +238,27 @@ function stores() {
   $("stores").replaceChildren(thead, body);
 }
 
+const saleText = (kind, n, typical) => kind === "start"
+  ? "sale started, " + num(n) + " products marked down, typical " + typical + "% off"
+  : "sale ended, " + num(n) + " products back to full price";
+
 function show(m) {
   M = m; $("min").textContent = MIN;
   $("when").textContent = "Updated " + new Date(m.generated).toLocaleString() + ". Tracking since " + day(m.since) + ".";
   const tiles = [[num(m.stores.length), "stores tracked"], [num(m.products), "products tracked"], [num(m.stock), "in stock"],
     [num(m.sale), "on sale now (" + m.min_discount + "% off or more): " + pct(m.stock ? m.sale / m.stock : null) + " of those in stock"],
-    [m.typical == null ? "–" : m.typical + "%", "typical discount on a sale item"], [num(m.deals), "deals watched from their start"]];
+    [m.typical == null ? "–" : m.typical + "%", "typical discount on a sale item"], [num(m.deals), "deals watched from their start"],
+    [num(new Set(m.sales.filter(e => e.kind === "start" && Date.now() - stamp(e.t) < 7 * 864e5).map(e => e.host)).size), "stores started a sale in the last 7 days"]];
   $("tiles").replaceChildren(...tiles.map(([big, small]) => { const t = el("div", "tile"); t.append(el("b", null, big), el("span", null, small)); return t; }));
+  $("sales").replaceChildren(...(m.sales.length ? m.sales.slice(0, 40).map(e => el("li", null, day(e.t) + " · " + e.name + ": " + saleText(e.kind, e.n, e.typical)))
+    : [el("li", "muted", "None seen yet.")]));
+  // every store together, day by day: is the whole market on sale more than usual?
+  const head = el("tr"), rows = [head];
+  for (const h of ["Day", "Stores read", "In stock", "On sale", "Share on sale"]) head.append(el("th", null, h));
+  for (const [d, n, stock, sale] of m.market.slice(-14).reverse()) {
+    const tr = el("tr"); tr.append(cell(day(d)), cell(num(n)), cell(num(stock)), cell(num(sale)), cell(pct(stock ? sale / stock : null))); rows.push(tr);
+  }
+  $("market").replaceChildren(...rows);
   lifeTable($("bands"), [...Object.entries(m.bands), ["Every discount", m]], m.horizons, "Discount");
   stores();
   $("wide").replaceChildren(...(m.storewide.length ? m.storewide.map(e =>

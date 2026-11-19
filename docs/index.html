@@ -42,6 +42,12 @@
   #count { color: var(--muted); margin: 0 0 10px; }
   #count button { border: 0; background: none; padding: 0; color: var(--accent); text-decoration: underline; }
   #count .stale { color: #e08a00; }
+  #changes { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin: 0 0 12px; }
+  #changes[hidden] { display: none; }
+  #changes summary { cursor: pointer; font-weight: 600; }
+  #changes ul { margin: 6px 0; padding-left: 18px; }
+  #changes a { color: var(--accent); }
+  #changes button { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 3px 10px; }
   #toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 20; display: flex; gap: 12px;
            align-items: center; background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 10px; }
   #toast[hidden] { display: none; }
@@ -172,6 +178,7 @@
 </header>
 <main>
   <p id="count"></p>
+  <div id="changes" hidden></div>
   <div class="grid" id="grid"></div>
   <button id="more" hidden>Show more</button>
 </main>
@@ -277,6 +284,7 @@ function loadPrefs(text) {
   const p = JSON.parse(text);
   prefs = { follows: p.follows || {}, itemCats: p.itemCats || {}, kept: p.kept || {}, storeCats: p.storeCats || {},
             hidden: p.hidden || {}, muted: p.muted || {}, gender: p.gender || "", notes: p.notes || [], calm: !!p.calm,
+            changes: p.changes || [],
             sizes: { tops: [], bottoms: [], shoes: [], ...(p.sizes || {}) } };
 }
 function savePrefs() { try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch (e) {} }
@@ -299,8 +307,85 @@ function daysSince(d) { return Math.floor((Date.now() - new Date(d + "T00:00:00Z
 // ---- follows, brands, your categories, sizes
 const isFollowed = i => i.id in prefs.follows;
 const brandKey = b => (b || "").toLowerCase().replace(/\b(wo)?mens\b/g, "").replace(/[^a-z0-9]/g, "");
+const brandOf = i => brandKey(i.brand || i.store_name);     // brand-run stores often leave the brand blank
+// The list (data.json) holds sale items. Everything else in stock is in brands/<n>.json, grouped by brand, and the
+// page fetches the files for the brands of your followed items: "From my brands" then shows a brand's whole range,
+// and a followed item keeps its current price after its sale ends. bucket() must match brand_file() in build.py.
+const BRAND_FILES = 512, LOADED = new Map(), ARRIVED = new Set();   // file number -> its items; the files that came back
+const bucket = key => { let n = 0; for (const c of key) n = (n * 31 + c.charCodeAt(0)) % BRAND_FILES; return n; };
+const myBrandKeys = () => new Set(Object.values(prefs.follows).map(brandOf).filter(Boolean));
+function extras() {
+  const mine = myBrandKeys(), out = [];
+  for (const list of LOADED.values()) for (const i of list) if (mine.has(brandOf(i)) && !IDS.has(i.id)) out.push(i);
+  return out;
+}
+// The files leave out what every item in them shares (in stock, no tags) and what can be worked out (the address).
+function fill(it) {
+  const i = Object.assign({ tags: [], avail: true, off: 0, extra: true }, it);
+  if (!i.url) i.url = "https://" + i.id.replace("/", "/products/");
+  if (i.usd == null && i.cur === "USD") i.usd = i.price;
+  return i;
+}
+function loadBrands() {
+  const need = [...new Set([...myBrandKeys()].map(bucket))].filter(n => !LOADED.has(n));
+  if (!need.length) return;
+  for (const n of need) LOADED.set(n, []);                   // asked for: don't fetch it twice
+  Promise.all(need.map(n => fetch("brands/" + n + ".json", { cache: "no-cache" })
+    .then(r => r.ok ? r.json() : null).catch(() => null)
+    .then(list => { if (list) { LOADED.set(n, list.map(fill)); ARRIVED.add(n); } })))
+    .then(() => { refreshCopies(); render(); });
+}
+const copyOf = ({ tags, gone, extra, ...copy }) => copy;      // what is kept of a starred or categorised item
+// Starred and categorised items keep a copy so they still show after they stop being listed. While an item is
+// still in the data, refresh its copy, so a later drop-out keeps its latest price and history, not the day it was starred.
+function refreshCopies() {
+  const byId = new Map([...extras(), ...DATA.items].map(i => [i.id, i]));
+  let fresh = false;
+  for (const map of [prefs.follows, prefs.kept]) for (const [id, old] of Object.entries(map)) {
+    const it = byId.get(id);
+    if (it) { if (map === prefs.follows) noteChanges(old, it); map[id] = copyOf(it); fresh = true; }
+    // in neither the list nor its brand's file (which did arrive): it has left the shop; say so once
+    else if (map === prefs.follows && !old.left && ARRIVED.has(bucket(brandOf(old)))) { old.left = TODAY; change(old, "gone"); fresh = true; }
+  }
+  prefs.changes = prefs.changes.filter(c => daysSince(c.day) <= 14).slice(0, 60);
+  if (fresh) savePrefs();
+}
+// ---- what changed on followed items: noticed when fresh data replaces the saved copy, kept two weeks
+const TODAY = new Date().toISOString().slice(0, 10);
+function change(i, kind, more) {
+  prefs.changes = prefs.changes.filter(c => !(c.id === i.id && c.kind === kind && c.day === TODAY));
+  prefs.changes.unshift({ id: i.id, title: i.title, store: i.store_name, url: i.url, day: TODAY, kind, ...more });
+}
+function noteChanges(old, now) {
+  if (old.price != null && now.price != null && Math.abs(now.price - old.price) >= 0.03 * old.price)   // 3%: the build's noise margin
+    change(now, now.price < old.price ? "down" : "up", { from: old.price, to: now.price, cur: now.cur });
+  const out = i => i.avail === false || !!i.left;
+  if (out(old) !== out(now)) change(now, out(now) ? "out" : "back");
+  else if (wantedSizes(now.kind).length && old.sz && now.sz && sizeOK(old) !== sizeOK(now)) change(now, sizeOK(now) ? "size_back" : "size_out");
+}
+const CHANGE_TEXT = { out: "Sold out", back: "Back in stock", gone: "No longer in stock or listed", size_back: "Your size is back", size_out: "Your size sold out" };
+function showChanges() {
+  const box = $("changes"), list = prefs.changes;
+  box.hidden = tab !== "wish" || !list.length;
+  if (box.hidden) return;
+  const d = el("details"), ul = el("ul"), clear = el("button", null, "Clear");
+  d.open = true; d.append(el("summary", null, "Recent changes to followed items (" + list.length + ")"));
+  for (const c of list) {
+    const li = el("li"), a = el("a", null, c.title); a.href = c.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+    const pct = c.from ? Math.round((c.to - c.from) / c.from * 100) : 0;
+    li.append(shortDay(c.day) + " · " + (c.from ? (c.to < c.from ? "↓ " : "↑ ") : CHANGE_TEXT[c.kind] + ": "), a,
+              " (" + c.store + ")" + (c.from ? ": " + money(c.from, c.cur) + " → " + money(c.to, c.cur) + " (" + (pct > 0 ? "+" : "") + pct + "%)" : ""));
+    ul.append(li);
+  }
+  clear.onclick = () => { prefs.changes = []; savePrefs(); showChanges(); };
+  d.append(ul, clear); box.replaceChildren(d);
+}
 // Everything in the latest data, plus starred or categorised items that have since dropped out of it.
-const pool = () => [...DATA.items, ...Object.values({ ...prefs.kept, ...prefs.follows }).filter(f => !IDS.has(f.id)).map(f => ({ ...f, tags: [], gone: true }))];
+function pool() {
+  const extra = extras(), have = new Set(extra.map(i => i.id));
+  return [...DATA.items, ...extra, ...Object.values({ ...prefs.kept, ...prefs.follows })
+    .filter(f => !IDS.has(f.id) && !have.has(f.id)).map(f => ({ ...f, tags: [], gone: true }))];
+}
 const namesIn = map => [...new Set(Object.values(map).flat())].sort((a, b) => a.localeCompare(b));
 function toggleCat(map, key, name) {
   const next = (map[key] || []).includes(name) ? map[key].filter(n => n !== name) : [...(map[key] || []), name];
@@ -309,8 +394,7 @@ function toggleCat(map, key, name) {
 function followedBrands(items) {
   const m = new Map();
   for (const i of items) {
-    const b = i.brand || i.store_name;                       // brand-run stores often leave the brand blank
-    if (isFollowed(i) && brandKey(b)) m.set(brandKey(b), b);
+    if (isFollowed(i) && brandOf(i)) m.set(brandOf(i), i.brand || i.store_name);
   }
   return m;
 }
@@ -412,7 +496,8 @@ function inTab(i, key, brands) {
   if (key === "wish") return isFollowed(i);                  // followed items ignore hidden stores
   if (i.gone) return key === "all" && i.id in prefs.itemCats;   // categorised, but no longer on sale
   if (!storeShown(i)) return false;
-  if (key === "brands") return brands.has(brandKey(i.brand)) && !isFollowed(i);
+  if (key === "brands") return brands.has(brandOf(i)) && !isFollowed(i);
+  if (i.extra) return false;                                 // off the list: only shown under its brand, or when followed
   return key === "all" || i.tags.includes(key);
 }
 function wantedSizes(kind) {
@@ -496,8 +581,8 @@ function star(i) {
   b.setAttribute("aria-label", "Follow"); set();
   b.onclick = () => {
     if (i.id in prefs.follows) delete prefs.follows[i.id];
-    else { const { tags, gone, ...copy } = i; prefs.follows[i.id] = copy; }
-    savePrefs();
+    else prefs.follows[i.id] = copyOf(i);
+    savePrefs(); loadBrands();
     if (tab === "wish" || tab === "brands") render(); else { set(); counts(pool()); }
   };
   return b;
@@ -548,7 +633,7 @@ function toast(text, undo) {
 // The ⋯ menu on a card: categories for this item and for its store, and hiding.
 function organize(i) {
   const keep = () => {                                       // categorised items keep a copy, like starred ones
-    if (i.id in prefs.itemCats) { const { tags, gone, ...copy } = i; prefs.kept[i.id] = copy; } else delete prefs.kept[i.id];
+    if (i.id in prefs.itemCats) prefs.kept[i.id] = copyOf(i); else delete prefs.kept[i.id];
     savePrefs();
   };
   const hide = el("div", "chips");
@@ -625,7 +710,7 @@ function card(i) {
   if (i.hist && i.price != null) b.append(spark(i));
   const notes = [];
   if (prefs.itemCats[i.id]) notes.push("In: " + prefs.itemCats[i.id].join(", "));
-  if (i.gone) notes.push("No longer listed; showing its last known details");
+  if (i.gone) notes.push("No longer in stock or listed; showing its last known details");
   if (i.tracked_drop) notes.push("Down from highest price tracked");
 
   if (i.avail === false) notes.push("Sold out");
@@ -634,6 +719,14 @@ function card(i) {
   if (i.sizes && i.sizes.length) notes.push(i.sizes.join(", "));
   const typical = typicalNote(i);                            // its own line, so it never runs into the sizes
   if (typical) b.append(el("div", "meta", typical));
+  // What tracking says about this deal, on a line of its own.
+  const facts = [], nDays = n => n === 1 ? "1 day" : n + " days";
+  if (i.off && !i.tracked_drop && !i.extra && i.first_seen) facts.push("On sale since " + shortDay(i.first_seen));
+  if (i.pre && i.was) facts.push(i.pre.high >= i.was * 0.95
+    ? "Sold at " + money(i.was, i.cur) + " here for " + (i.pre.at >= 1 ? nDays(i.pre.at) : "under a day") + " before the sale"
+    : "Never seen at " + money(i.was, i.cur) + " here: highest " + money(i.pre.high, i.cur) + " in the " + nDays(Math.max(1, i.pre.watched)) + " before the sale");
+  if (i.back) facts.push("Back in stock since " + shortDay(i.back));
+  if (facts.length) b.append(el("div", "meta", facts.join(" · ")));
   if (notes.length) b.append(el("div", "meta", notes.join(" · ")));
   a.append(b); c.append(a, star(i), orgButton(i));
   return c;
@@ -647,16 +740,17 @@ function counts(items, brands = followedBrands(items)) {
 }
 function render() {
   const items = pool(), brands = followedBrands(items), list = filtered(items, brands), grid = $("grid");
+  showChanges();
   grid.replaceChildren(...list.slice(0, shown).map(card));
   if (!list.length) grid.replaceChildren(el("div", "empty", tab === "brands" && !brands.size
-    ? "Star an item (☆) to see everything on sale from its brand."
+    ? "Star an item (☆) to see everything from its brand, on sale or not."
     : tab === "wish" && !items.some(isFollowed) ? "Nothing followed yet. Star an item (☆) to keep track of it."
     : HISTORY_SORT[$("sort").value] ? "No tracked price changes match these filters yet. Prices are checked twice a day, so these lists grow over time."
     : "Nothing matches these filters."));
   const hs = HISTORY_SORT[$("sort").value];
   let text = list.length + (list.length === 1 ? " item" : " items") + (hs ? hs[dir < 0 ? 0 : 1] : "");
   if (tab === "brands" && list.length)                       // name only the brands that have something to show
-    text += " from brands you follow: " + [...new Set(list.map(i => brands.get(brandKey(i.brand))))].sort().join(", ");
+    text += " from brands you follow: " + [...new Set(list.map(i => brands.get(brandOf(i))))].sort().join(", ");
   const parts = [text], calmBtn = label => { const b = el("button", null, label);
     b.onclick = () => { prefs.calm = !prefs.calm; $("calm").checked = prefs.calm; savePrefs(); reset(); }; return b; };
   if (tab !== "wish" && $("storecat").value !== "crowded" && CROWD.hosts.size) {
@@ -764,15 +858,8 @@ function fillCatMenus() {
 
 function setup() {
   IDS = new Set(DATA.items.map(i => i.id));
-  // Starred and categorised items keep a copy so they still show after they stop being listed. While an item is
-  // still listed, refresh its copy, so a later drop-out keeps its latest price and history, not the day it was starred.
-  const byId = new Map(DATA.items.map(i => [i.id, i]));
-  let fresh = false;
-  for (const map of [prefs.follows, prefs.kept]) for (const id of Object.keys(map)) {
-    const it = byId.get(id);
-    if (it) { const { tags, gone, ...copy } = it; map[id] = copy; fresh = true; }
-  }
-  if (fresh) savePrefs();
+  refreshCopies();
+  loadBrands();
   CROWD = crowd();
   REL = relStats();
   for (const [key, label] of TABS) {
