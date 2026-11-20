@@ -1,0 +1,72 @@
+name: Algolia search keys
+
+# The stores read through an Algolia search (Yoox) are read with a plain GET using the public search key their
+# own pages hand out, so the hourly build needs no browser. A shop can rotate that key, and the store then stops
+# reading. This run checks the stored keys once a week with the standard library, and only when one has died does
+# it open the store's own page in a browser to read the key again and commit it.
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"        # Mondays, early (UTC)
+  workflow_dispatch:
+    inputs:
+      capture:
+        description: "always: read the keys from the stores' own pages even if the stored ones still work."
+        type: choice
+        options: [when-broken, always]
+        default: when-broken
+
+permissions:
+  contents: write               # to commit a new key
+
+concurrency:
+  group: algolia-keys
+  cancel-in-progress: false
+
+jobs:
+  keys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Standard library only: one search per store with the key as stored.
+      - name: Check the stored keys
+        id: check
+        continue-on-error: true
+        run: python3 tools/algolia_keys.py
+
+      - name: Decide whether to reach for a browser
+        id: decide
+        run: |
+          if [ "${{ inputs.capture }}" = "always" ] || [ "${{ steps.check.outcome }}" = "failure" ]; then
+            echo "capture=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "capture=no" >> "$GITHUB_OUTPUT"
+            echo "Every stored key still answers; no browser needed."
+          fi
+
+      - name: Install a browser
+        if: steps.decide.outputs.capture == 'yes'
+        run: |
+          python3 -m pip install --quiet playwright
+          python3 -m playwright install --with-deps chromium
+
+      # The shops that need this turn a plain request away at the edge, so the page is opened as a visitor would
+      # open it, and only its search key is taken from it.
+      - name: Read the keys from the stores' own pages
+        if: steps.decide.outputs.capture == 'yes'
+        run: python3 tools/algolia_keys.py --capture --write
+
+      - name: Commit a new key
+        if: steps.decide.outputs.capture == 'yes'
+        run: |
+          if git diff --quiet -- stores.json; then
+            echo "No key changed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add stores.json
+          git commit -m "A store rotated its Algolia search key"
+          git push

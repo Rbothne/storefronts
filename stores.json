@@ -291,7 +291,7 @@
     {"host": "www.mytheresa.com", "name": "Mytheresa", "platform": "link", "group": "clothing"},
     {"host": "www.luisaviaroma.com", "name": "LuisaViaRoma", "platform": "link", "group": "clothing"},
     {"host": "www.theoutnet.com", "name": "The Outnet", "platform": "link", "group": "clothing"},
-    {"host": "www.yoox.com", "name": "Yoox", "platform": "link", "group": "clothing"},
+    {"host": "www.yoox.com", "name": "Yoox", "platform": "page", "group": "clothing", "currency": "USD", "browse": true, "read": "algolia", "algolia": {"app": "UILB72FSNV", "key": "7fbacd0b950c97ae315987c2d7abbe08", "index": "INDEX_YOOX_US_Products"}, "key_page": "https://www.yoox.com/us/women", "queries": [["departments:SaleWomen AND purchasable:true AND visible:true", "womens"], ["departments:SaleMen AND purchasable:true AND visible:true", "mens"]], "size": 1000, "max_pages": 6, "title": "{model.modelName} {model.categories.micro}", "product_url": "https://www.yoox.com/us/{id}/item", "image_url": "https://www.yoox.com/images/items/{head}/{id}_14_f.jpg?impolicy=crop&width=360&height=458&gravity=Center", "fields": {"id": "objectID", "price": "modelBestOfferByPrice.currentPrice", "was": "modelBestOfferByPrice.fullPrice", "cur": "modelBestOfferByPrice.currency", "sizes": "availableSizes", "brand": "model.brand", "ptype": "model.categories.micro", "avail": "purchasable"}},
     {"host": "www.24s.com", "name": "24S", "platform": "link", "group": "clothing"},
     {"host": "www.cettire.com", "name": "Cettire", "platform": "link", "group": "clothing"},
     {"host": "www.beams.co.jp", "name": "Beams Japan", "platform": "link", "group": "clothing"},

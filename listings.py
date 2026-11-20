@@ -1013,6 +1013,91 @@ def read_netsuite(host, store, fetch, max_pages, run):
     run["cut"] = True
 
 
+def dotted(value, path):
+    """The value at a dotted path in a hit: "model.categories.micro"."""
+    for key in path.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value
+
+
+def facet_value(v):
+    """One readable value out of what a search index holds: Algolia files a field as a list of the levels of its
+    hierarchy, each with the shop's own code on the end ("PALOMA BARCELO-830 > PALOMITAS by ...-21402"). The top
+    level without its code is wanted, and a name the index shouts is given back in words."""
+    if isinstance(v, list):
+        v = v[0] if v else ""
+    if not isinstance(v, str):
+        return "" if v is None else str(v)
+    v = re.sub(r"\s*-\s*[0-9]+$", "", v.split(" > ")[0]).strip()
+    return v.title() if v and v == v.upper() and re.search(r"[A-Z]{3}", v) else v
+
+
+def algolia_item(hit, store):
+    """One product out of a search index, described by "fields" in stores.json: a dotted path per field of the
+    site's own item ("price": "modelBestOfferByPrice.currentPrice"). "title" is a template over the same paths,
+    "product_url" and "image_url" templates over the product's id."""
+    fields = store.get("fields") or {}
+    got = {k: dotted(hit, p) for k, p in fields.items()}
+    price, was = num(got.get("price")), num(got.get("was"))
+    pid = str(got.get("id") or hit.get("objectID") or "")
+    if not price or not pid:
+        return None
+    title = re.sub(r"\s+", " ", re.sub(r"\{([\w.]+)\}", lambda m: facet_value(dotted(hit, m.group(1))) or "",
+                                       store.get("title", "") or "")).strip()
+    sizes = [s for s in (size_label(s) for s in (got.get("sizes") or [])) if s] if \
+        isinstance(got.get("sizes"), list) else []
+    return {"title": title or facet_value(got.get("ptype")) or pid,
+            "url": store["product_url"].format(id=pid),
+            "img": store.get("image_url", "").format(id=pid, head=pid[:2].lower()),
+            "price": price, "was": was if was and was > price else None,
+            "cur": str(got.get("cur") or ""),
+            "avail": got.get("avail") if isinstance(got.get("avail"), bool) else None,
+            "sizes": sizes, "brand": facet_value(got.get("brand")),
+            "ptype": facet_value(got.get("ptype"))}
+
+
+def read_algolia(host, store, fetch, max_pages, run):
+    """A shop whose listing pages are built in the visitor's browser by an Algolia search, from the search key
+    the page hands out. The index answers a plain GET, 1000 products at a time, so a whole sale department comes
+    back in a handful of requests. "algolia" in stores.json holds the application, the key and the index, and
+    "queries" the filters to ask for ([filter, what it lists])."""
+    errors, cfg = run["errors"], store["algolia"]
+    origin = "https://%s-dsn.algolia.net" % cfg["app"].lower()
+    size = store.get("size", 1000)
+    seen = set()
+    for entry in store["queries"]:
+        filters, kind = (entry, "") if isinstance(entry, str) else entry
+        for n in range(max_pages):
+            url = "%s/1/indexes/%s?%s" % (origin, quote(cfg["index"]), urlencode(
+                {"x-algolia-api-key": cfg["key"], "x-algolia-application-id": cfg["app"],
+                 "filters": filters, "hitsPerPage": size, "page": n}))
+            if not allowed(fetch, url):
+                errors.append("robots.txt disallows the search index")
+                return
+            status, body = fetch(url)
+            try:
+                data = json.loads(body) if status == 200 else None
+            except ValueError:
+                data = None
+            if not isinstance(data, dict) or not isinstance(data.get("hits"), list):
+                errors.append(f"search for {filters[:40]}: HTTP {status}")
+                break
+            fresh = 0
+            for h in data["hits"]:
+                it = algolia_item(h, store)
+                if it and it["url"] not in seen:
+                    seen.add(it["url"])
+                    fresh += 1
+                    it["ptype"] = (kind + " " + it["ptype"]).strip()
+                    yield it
+            if not fresh or n + 1 >= int(data.get("nbPages") or 0):
+                break
+            if n + 1 == max_pages:
+                run["cut"] = True
+
+
 def first_url(images):
     """The first image address in NetSuite's images, which are filed by colour: {"KHAKI": {"urls": [{"url": ...}]}}."""
     if isinstance(images, dict):
@@ -1026,7 +1111,8 @@ def first_url(images):
     return ""
 
 
-READERS = {"listing": read_listing, "woocommerce": read_woocommerce, "netsuite": read_netsuite}
+READERS = {"listing": read_listing, "woocommerce": read_woocommerce, "netsuite": read_netsuite,
+           "algolia": read_algolia}
 
 
 def read(host, store, fetch, max_pages, run):
