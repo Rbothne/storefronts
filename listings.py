@@ -30,7 +30,9 @@ which build.py turns into a site item the way it does a Shopify product.
 """
 import html as htmllib
 import json
+import os
 import re
+import time
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse
 
 # ---------------------------------------------------------------- robots.txt
@@ -864,6 +866,10 @@ def products(page, base, store):
     found = VIA[store.get("via", "ld")](page, base, store)
     if store.get("skip"):
         found = [it for it in found if not re.search(store["skip"], it["title"] + " " + it["url"], re.I)]
+    if store.get("trim"):
+        # a badge the grid prints inside the name ("New Season Valentino Garavani ...")
+        for it in found:
+            it["title"] = clean_title(re.sub(store["trim"], "", it["title"], flags=re.I))
     if store.get("via", "ld") in ("ld", "json") and any(it["was"] is None or not it["sizes"] for it in found):
         # what the tiles of the same page show about a product the data left out
         tiles = {canon(t["url"]): t for t in from_tiles(page, base, store)}
@@ -1058,6 +1064,29 @@ def algolia_item(hit, store):
             "ptype": facet_value(got.get("ptype"))}
 
 
+def read_harvest(host, store, fetch, max_pages, run):
+    """A store that no plain request reaches at all: its pages are opened in a browser by tools/harvest.py on a
+    schedule of its own, and what that found is left in data/harvest/<host>.json for the build to read from disk.
+    Nothing is fetched here. A harvest older than "stale_days" (a week by default) is still used -- a stale price
+    is better than an empty store -- but it is reported, so a run says when a browser last got through."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "harvest", host + ".json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError) as e:
+        run["errors"].append("no harvest to read: %s" % str(e)[:60])
+        return
+    when, items = saved.get("fetched", ""), saved.get("items") or []
+    days = (time.time() - saved.get("at", 0)) / 86400 if saved.get("at") else 999
+    if days > store.get("stale_days", 7):
+        run["errors"].append("the harvest is %s, from %s" % (
+            "%.0f days old" % days if days < 999 else "undated", when[:16] or "?"))
+    for d in items:
+        if isinstance(d, dict) and d.get("price") and d.get("url"):
+            yield {"title": "", "img": "", "was": None, "cur": "", "avail": None, "sizes": [], "brand": "",
+                   "ptype": "", **d}
+
+
 def read_algolia(host, store, fetch, max_pages, run):
     """A shop whose listing pages are built in the visitor's browser by an Algolia search, from the search key
     the page hands out. The index answers a plain GET, 1000 products at a time, so a whole sale department comes
@@ -1112,7 +1141,7 @@ def first_url(images):
 
 
 READERS = {"listing": read_listing, "woocommerce": read_woocommerce, "netsuite": read_netsuite,
-           "algolia": read_algolia}
+           "algolia": read_algolia, "harvest": read_harvest}
 
 
 def read(host, store, fetch, max_pages, run):

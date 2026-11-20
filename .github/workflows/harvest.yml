@@ -1,0 +1,105 @@
+name: Harvest guarded stores
+
+# A few shops answer HTTP 403 (or a Cloudflare challenge) to anything their edge does not take for a person's
+# browser. Those are marked "read": "harvest" in stores.json: this run opens their pages in a real Chromium once
+# a day, pulls the products out with the same extractors the build uses, and leaves the result on the data branch
+# as harvest/<host>.json for the hourly build to read from disk. The build itself never goes near these stores
+# and stays standard-library-only.
+#
+# These edges judge the client's ADDRESS as much as its fingerprint, and a GitHub-hosted runner is a datacenter
+# address that many of them refuse outright. Set the repository variable HARVEST_RUNNER to the label of a
+# self-hosted runner on an ordinary connection to run it from there instead. Either way the log says, per store
+# and per page, exactly what the store answered, and a store that refuses keeps its last harvest rather than
+# emptying.
+
+on:
+  schedule:
+    - cron: "41 4 * * *"        # once a day, before the morning full refresh
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "one store's host, or blank for all of them"
+        type: string
+      headed:
+        description: "run the browser with a window (under xvfb). Some edges refuse a headless one."
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
+
+permissions:
+  contents: write               # to replace the data branch
+
+concurrency:
+  group: update-listings        # the same group as the build: neither may rewrite the data branch under the other
+  cancel-in-progress: false
+
+jobs:
+  harvest:
+    runs-on: ${{ vars.HARVEST_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install a browser
+        run: |
+          python3 -m pip install --quiet playwright
+          python3 -m playwright install --with-deps chromium
+
+      # Everything the data branch holds, so this run can put back what it does not change.
+      - name: Get the latest data
+        run: |
+          before="$RUNNER_TEMP/before"
+          mkdir -p "$before" data/harvest
+          git fetch --depth=1 origin data
+          git archive FETCH_HEAD | tar -x -C "$before"
+          if [ -d "$before/harvest" ]; then cp -r "$before/harvest/." data/harvest/; fi
+          ls -l data/harvest || true
+
+      # A store the runner's address cannot see leaves its last harvest alone, and the tool exits non-zero; that
+      # is worth reporting but must not fail the run, or one blocked store would stop the others being saved.
+      - name: Open the stores in a browser
+        id: harvest
+        continue-on-error: true
+        run: |
+          only=""
+          if [ -n "${{ inputs.only }}" ]; then only="--only ${{ inputs.only }}"; fi
+          if [ "${{ inputs.headed }}" = "yes" ]; then
+            sudo apt-get install -y --no-install-recommends xvfb
+            xvfb-run -a python3 tools/harvest.py $only --show
+          else
+            python3 tools/harvest.py $only
+          fi
+
+      - name: Say what came back
+        run: |
+          for f in data/harvest/*.json; do
+            [ -e "$f" ] || continue
+            python3 - "$f" <<'EOF'
+          import json, sys, time
+          d = json.load(open(sys.argv[1], encoding="utf-8"))
+          age = (time.time() - d.get("at", 0)) / 3600
+          print("%-24s %5d products, harvested %.0f hours ago" % (d["host"], len(d["items"]), age))
+          EOF
+          done
+          if [ "${{ steps.harvest.outcome }}" = "failure" ]; then
+            echo "::warning::at least one store refused this runner's address; see the log above"
+          fi
+
+      # Replace the data branch with its own contents plus the new harvest, as a single commit, the way the build
+      # does. Nothing else on the branch is touched.
+      - name: Save the harvest
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          cp -r "$RUNNER_TEMP/before/." "$out/" 2>/dev/null || true
+          rm -rf "$out/harvest"
+          cp -r data/harvest "$out/harvest"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/data.index"
+          git --git-dir="$PWD/.git" --work-tree="$out" add -A .
+          commit=$(git commit-tree "$(git write-tree)" -m "Harvest of the guarded stores, $(date -u +%Y-%m-%dT%H:%MZ)")
+          git push --force origin "$commit:refs/heads/data"

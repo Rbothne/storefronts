@@ -84,6 +84,9 @@ jobs:
           if [ -d "$before/state" ]; then cp -r "$before/state" data/state; fi
           if [ -d "$before/catalog" ]; then cp -r "$before/catalog" data/catalog; fi
           if [ -f "$before/state.json" ]; then cp "$before/state.json" data/state.json; fi   # the format before one file per store
+          # what a browser found at the stores no plain request reaches (see .github/workflows/harvest.yml)
+          mkdir -p data/harvest
+          if [ -d "$before/harvest" ]; then cp -r "$before/harvest/." data/harvest/; fi
 
       - name: Fetch stores and build data
         if: env.REBUILD == 'true'
@@ -129,6 +132,7 @@ jobs:
           cp docs/data.json docs/metrics.json "$out/"
           cp -r data/state "$out/state"
           cp -r data/catalog "$out/catalog"
+          if [ -d data/harvest ]; then cp -r data/harvest "$out/harvest"; fi   # kept as the harvest run left it
           export GIT_INDEX_FILE="$RUNNER_TEMP/data.index"
           git --git-dir="$PWD/.git" --work-tree="$out" add -A .
           commit=$(git commit-tree "$(git write-tree)" -m "Listings and price history, $(date -u +%Y-%m-%dT%H:%MZ)")
