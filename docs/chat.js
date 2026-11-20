@@ -181,6 +181,8 @@ function viewText() {
   if (picked.size) bits.push("category: " + pickedNames().join(", "));
   for (const [id, name] of [["store", "store"], ["itemcat", "my item category"], ["storecat", "my store category"],
                             ["gender", "showing"], ["minoff", "discount"]]) { const v = pick(id); if (v && $(id).value !== "0") bits.push(name + ": " + v); }
+  const range = priceRange();
+  if (range.some(v => v != null)) bits.push("price: " + priceWords(range) + " (US dollars)");
   bits.push("sort: " + $("sort").selectedOptions[0].text + " (" + $("dir").textContent.replace(/^[↑↓] /, "") + ")");
   if ($("mysizes").checked) bits.push("only items in my sizes");
   const shown = filtered(pool(), followedBrands(pool())).length;

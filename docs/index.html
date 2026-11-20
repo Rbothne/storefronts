@@ -55,6 +55,13 @@
   .picker .twist { border: 0; background: none; width: 22px; padding: 2px 0; color: var(--muted); flex: none; font-size: 17px; line-height: 1; }
   .picker .twist:disabled { cursor: default; }
   .picker .panel label.sub { padding-left: 44px; }
+  /* the price range: two boxes and a row of ready-made ranges */
+  .picker .range { display: flex; gap: 10px; }
+  .picker .range label { color: var(--muted); }
+  .picker .range input { width: 7ch; flex: none; padding: 5px 6px; border-radius: 7px;
+                         border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .picker .panel .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; white-space: normal; }
+  #pricepresets { margin-top: 8px; }
   @media (max-width: 700px) {                                   /* phones: the panel opens in place, full width */
     .picker[open] { flex: 1 1 100%; }
     .picker .panel { position: static; margin-top: 4px; max-height: none; max-width: none; box-shadow: none; }
@@ -187,6 +194,17 @@
       <option value="">Men's and women's</option><option value="m">Men's and unisex</option>
       <option value="w">Women's and unisex</option><option value="k">Kids</option>
     </select>
+    <details class="picker" id="prices">
+      <summary>Price: <span id="pricelabel">Any</span></summary>
+      <div class="panel" id="pricepanel">
+        <div class="range">
+          <label>Min <input type="number" id="pmin" min="0" step="10" inputmode="numeric" placeholder="0"></label>
+          <label>Max <input type="number" id="pmax" min="0" step="10" inputmode="numeric" placeholder="Any"></label>
+        </div>
+        <div class="chips" id="pricepresets"></div>
+        <p class="note" id="pricenote"></p>
+      </div>
+    </details>
     <select id="minoff" aria-label="Minimum discount">
       <option value="0">Any discount</option><option value="20">20%+ off</option>
       <option value="30">30%+ off</option><option value="40">40%+ off</option>
@@ -546,8 +564,25 @@ function sizeOK(i) {
   return !want.length || i.sz.some(t => want.includes(t));
 }
 
+// The price filter. Stores quote in their own currency, so it compares the same US dollar value the Price sort
+// does (i.usd, which build.py works out at the exchange rates of the day, falling back to the price itself where
+// the store already quotes dollars). An item with no price at all cannot be in a range, so a set range hides it.
+const priceOf = i => i.usd ?? i.price ?? null;
+const priceRange = () => {
+  const n = id => { const v = parseFloat($(id).value); return isFinite(v) && v >= 0 ? v : null; };
+  let [lo, hi] = [n("pmin"), n("pmax")];
+  if (lo != null && hi != null && lo > hi) [lo, hi] = [hi, lo];   // typed the wrong way round
+  return [lo, hi];
+};
+function inPrice(i, lo, hi) {
+  if (lo == null && hi == null) return true;
+  const p = priceOf(i);
+  return p != null && (lo == null || p >= lo) && (hi == null || p <= hi);
+}
+
 function filtered(items, brands) {
   const q = $("q").value.trim().toLowerCase(), s = $("store").value;
+  const [plo, phi] = priceRange();
   // Everything listed is in stock, so "In stock" only means something on the Followed tab
   const min = +$("minoff").value, stock = tab === "wish" && $("stock").checked, mine = $("mysizes").checked, gen = $("gender").value;
   const cat = $("itemcat").value.slice(2);
@@ -558,6 +593,7 @@ function filtered(items, brands) {
     (sort !== "drop" || (dropped(i) || rose(i)) && !i.storewide) &&
     (!picked.size || picked.has(leafOf(i))) && (!s || i.store === s) &&
     (i.off || 0) >= min && (!stock || i.avail === true) && (!mine || sizeOK(i)) &&
+    inPrice(i, plo, phi) &&
     fitsShown(i, gen) &&
     (!cat || (prefs.itemCats[i.id] || []).includes(cat)) &&
     (!q || (i.title + " " + (i.brand || "") + " " + i.store_name).toLowerCase().includes(q)));
@@ -802,6 +838,7 @@ function render() {
   $("count").replaceChildren(...parts);
   // phones: the Filters button says how many filters are set
   const set = ["store", "itemcat", "storecat", "gender"].filter(id => $(id).value).length + (picked.size > 0) + ($("minoff").value !== "0") +
+              (priceRange().some(v => v != null) ? 1 : 0) +
               ($("sort").value !== "best" || dir !== -1) + $("mysizes").checked + (tab === "wish" && $("stock").checked);
   $("filtersbtn").textContent = "Filters" + (set ? " · " + set : "");
   $("more").hidden = list.length <= shown;
@@ -810,6 +847,35 @@ function render() {
   $("stock").parentNode.hidden = tab !== "wish";
 }
 function reset() { shown = PAGE; render(); }
+
+// Ready-made ranges, and the words for whatever is set. Both ends are in US dollars.
+const PRICE_PRESETS = [["Any", null, null], ["Under $25", null, 25], ["Under $50", null, 50],
+                       ["$50–100", 50, 100], ["$100–250", 100, 250], ["$250–500", 250, 500], ["$500+", 500, null]];
+const priceWords = ([lo, hi]) =>
+  lo == null && hi == null ? "Any" : lo == null ? "Under $" + hi : hi == null ? "$" + lo + "+"
+  : lo === hi ? "$" + lo : "$" + lo + "–" + hi;
+
+function drawPrices() {
+  const [lo, hi] = priceRange();
+  $("pricelabel").textContent = priceWords([lo, hi]);
+  const box = $("pricepresets");
+  box.replaceChildren(...PRICE_PRESETS.map(([name, a, b]) => {
+    const btn = el("button", null, name);
+    btn.setAttribute("aria-pressed", String(a === lo && b === hi));
+    btn.onclick = () => {
+      $("pmin").value = a == null ? "" : a;
+      $("pmax").value = b == null ? "" : b;
+      drawPrices();
+      reset();
+    };
+    return btn;
+  }));
+  // say what is being compared, and whether anything on the list is quoted in another currency
+  const other = DATA.items.some(i => i.cur && i.cur !== "USD");
+  $("pricenote").textContent = other
+    ? "Compared in US dollars, so prices quoted in another currency are converted at the day's rate."
+    : "Both ends in US dollars. Leave one empty for no limit.";
+}
 // What the price-history sorts list, said under the filters (prices are tracked from the day an item is first seen).
 const HISTORY_SORT = { drop: [" whose price changed while tracked", " whose price changed while tracked"] };
 
@@ -1005,9 +1071,12 @@ function setup() {
     $("tabs").append(btn);
   }
   buildCats();
-  // A click outside the menu closes it. composedPath is where the click landed: a click in the panel redraws it,
+  drawPrices();
+  // A click outside a menu closes it. composedPath is where the click landed: a click in the panel redraws it,
   // so by now the thing clicked may have left the page, and contains() would call that an outside click.
-  document.addEventListener("click", e => { if ($("cats").open && !e.composedPath().includes($("cats"))) $("cats").open = false; });
+  document.addEventListener("click", e => {
+    for (const id of ["cats", "prices"]) if ($(id).open && !e.composedPath().includes($(id))) $(id).open = false;
+  });
   const stores = [...new Map(DATA.items.map(i => [i.store, i.store_name])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
   $("store").append(new Option("All stores", ""), ...stores.map(([h, n]) => new Option(n, h)));
   fillCatMenus();
@@ -1015,6 +1084,7 @@ function setup() {
   $("dir").onclick = () => { dir = -dir; showDir(); reset(); };
   showDir();
   for (const id of ["q", "store", "itemcat", "storecat", "minoff", "sort", "stock", "mysizes"]) $(id).addEventListener("input", reset);
+  for (const id of ["pmin", "pmax"]) $(id).addEventListener("input", () => { drawPrices(); reset(); });
   $("gender").value = prefs.gender;                           // remembered between visits
   $("gender").addEventListener("input", () => { prefs.gender = $("gender").value; savePrefs(); reset(); });
   $("more").onclick = () => { shown += PAGE; render(); };
