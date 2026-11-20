@@ -8,9 +8,35 @@ probed two or three times over, and a verdict here is a probe you do not need to
 Keep it current. A store that gets read moves out of the tables; a store that turns out to be readable gets its
 finding corrected rather than a second row underneath.
 
+## No store in here is finished
+
+A verdict below records **a route that was tried**, never a store that is beyond reading. Both of the hardest
+stores on this site were written off twice before they were read: Yoox had three sessions of `guarded` against
+its name and now hands over 11,973 products with sizes and both prices in twelve plain requests, because
+somebody finally looked at which host its grid was built from instead of at its front door again. Cettire was
+`guarded` too, and its rendered grid turned out to read with eight words of configuration.
+
+So:
+
+- **A closed route is not a closed store.** Work down every route in the list below before you write anything
+  in the `no route` direction, and name the ones you tried so the next person starts past them.
+- **Change route rather than push harder.** A route that answered 403 twice will answer it the third time;
+  the catalogue is usually sitting somewhere else, openly served, with better fields than the page would have
+  given you. Yoox's search index carries sizes and two prices; its pages carry nothing at all.
+- **Asking harder is the one thing that loses a store for good.** Every lasting refusal recorded here was
+  earned by a single greedy request, and it cost the store. Talbots reads cleanly at `sz=18`; `sz=72` ended it
+  for the session. Being relentless means trying more *routes*, not more requests down one of them.
+- **Come back.** Shops get rebuilt, shut shops reopen, keys rotate, platforms get replaced. Children of the
+  Discordance was probed on a day its shop was empty. The Tokyo renamed its tile classes and quietly stopped
+  giving up brand names. A verdict with a date on it is a starting point, not an answer.
+- **Nothing is left at "it refused me".** If every route in a row is spent, the row should say what would open
+  it — a header that was never captured, a page nobody has managed to render, a count nobody has taken. The
+  "Still open" list at the bottom is written that way on purpose.
+
 ## Looking for a way to read a store
 
-In the order that has actually paid off, cheapest first. Stop at the first that answers.
+In the order that has actually paid off, cheapest first — but go on down the list, not back up it. Nine of
+these routes have each read at least one store that an earlier route had refused.
 
 1. **A Shopify feed.** `/products.json?limit=250&page=N` on the host, then on the sibling host a headless front
    end hides behind — look in the page for `cdn.shopify.com`, `Shopify.shop` or a `*.myshopify.com` name. Eight
@@ -32,8 +58,19 @@ In the order that has actually paid off, cheapest first. Stop at the first that 
    `search.cettire.com` answers 400 to a byte-identical body, and 415 to the wrong content type).
 5. **A browser harvest** (`"read": "harvest"`, `tools/harvest.py`). Only for a store that serves a usable grid
    to a browser and nothing to a plain request. It runs on its own daily schedule, never inside the build.
-6. **Sitemaps and product pages.** One request per product: workable only for a few hundred products. Note the
-   count here so nobody counts it again.
+6. **Sitemaps.** The product sitemap gives a count and one request per product, which is workable only for a few
+   hundred — note the count here so nobody counts it again. The *collection* sitemap is the more useful half:
+   it hands you the category paths a `listing` store needs, which is otherwise the slowest part of adding one.
+7. **The same shop somewhere else.** A shop is often several storefronts, and they are not all built the same:
+   another country or language site (`/eu/`, `/en-gb/`, a national domain), the mobile host, an older platform
+   left running on a subdomain, or a regional franchise. Vilebrequin serves `/us/`, `/eu/` and more off one
+   catalogue; Manastash's reading comes from `mix.tokyo`, Visvim's from `shop.visvim.com`, BYLT's from a
+   `myshopify` host — none of which is the address the store is listed under.
+8. **The same catalogue through somebody else.** A brand that cannot be read directly is often carried, with
+   prices, by a retailer the site already reads — and a retailer that cannot be read is sometimes the only
+   place a brand's own shop is readable. Worth checking before a store is left out entirely.
+9. **A feed the shop publishes on purpose.** A Google Shopping or Meta catalogue file linked from the site.
+   (Affiliate-network feeds need an account; don't sign up for one.)
 
 ## What keeps going wrong
 
@@ -68,12 +105,20 @@ In the order that has actually paid off, cheapest first. Stop at the first that 
 
 ## Verdicts used below
 
+Every one of these describes a route, not a store. None of them means the store is done with.
+
 - `read, …` — readable; it is in `stores.json` now and should not be in these tables.
-- `feed` / `pages` / `search key` — a way in was found and written down; nobody has wired it up yet.
-- `guarded, address` — refuses automated reading at the edge, whatever the client looks like.
-- `guarded, robots` — a feed exists but its host's `robots.txt` forbids it. Not to be used.
-- `nothing` — reachable, but no product list is served. The row says what was tried.
-- `wrong-address` — the host is not the store's.
+- `feed` / `pages` / `search key` — a way in was found and written down; nobody has wired it up yet. These are
+  the rows with something ready to use, and they are the cheapest work in the file.
+- `guarded, address` — this client is refused at the edge however it asks, so the way on is a different route
+  into the same catalogue, or the same route from somewhere else. The row says what answered (status, challenge
+  name, `Server`) and whether a browser was refused too, because that is the difference between a store that
+  wants a harvest and one that wants another route entirely.
+- `guarded, robots` — a feed exists but its host's `robots.txt` forbids it, so that feed is not used. Only the
+  feed is settled; the store is not, and another route may serve the same catalogue.
+- `nothing` — reachable, and no product list in what was looked at. The row says what that was, so the next
+  attempt looks somewhere new.
+- `wrong-address` — the host is not the store's. Find the right one.
 
 ## In `stores.json`, not read yet
 
@@ -221,6 +266,8 @@ Mall and department stores, and alternative hosts found for stores already on th
 
 ## Still open, in rough order of what it would be worth
 
+This is a work queue, not a list of defeats. Every item says the next thing to try, because every item has one.
+
 1. **Farfetch, Net-a-Porter, LuisaViaRoma.** All three refuse this machine's address, not its browser. Point
    `HARVEST_RUNNER` at a runner on an ordinary connection, open one listing page of each, and look for either a
    usable rendered grid (`read: harvest`) or a third-party search call (`read: algolia`, far better). Nothing
@@ -232,6 +279,14 @@ Mall and department stores, and alternative hosts found for stores already on th
    instead of a daily harvest.
 3. **Talbots.** The settings that read it cleanly are in `README.md`; it needs an address it has not blocked.
 4. **Prada and Loewe** are read from their pages (626 and 190 products) but carry no original price and no
-   sizes. Neither makes a search call — checked — so a fuller reading would have to come from somewhere else.
+   sizes. Neither makes a search call from a category page — checked — so the fuller reading has to come from
+   somewhere else: their other storefronts (`/it/`, `/eu/`, a national domain) run the same catalogue and may
+   be built differently, and a product page may carry JSON-LD with both prices where the grid does not.
 5. **The `feed` and `pages` rows above** that nobody has wired up: each is a `stores.json` entry away, and the
-   endpoint in the table was actually fetched when it was recorded.
+   endpoint in the table was actually fetched when it was recorded. This is the cheapest work in the file.
+6. **The `nothing` and `guarded` rows.** None of them has had all nine routes spent on it — most were probed
+   before the search-host route and the sibling-storefront route were known to work at all. They are worth
+   another pass, starting at route 3, not route 1.
+7. **Everything already read, read wider.** Twenty-odd `listing` stores cover a handful of categories out of
+   dozens, and a store whose `max_pages` cap is being hit (`cut` in the run log) is being read short. Adding a
+   category to a store that already works is the least glamorous and most reliable way to grow the site.

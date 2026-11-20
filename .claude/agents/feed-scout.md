@@ -13,16 +13,24 @@ tried and which wall it hit, and it leads with the order of attack that has actu
 that keep being repeated. Do not re-probe a store it has a verdict for unless you are testing something that
 verdict did not try; say which. Report in a shape that can be folded into that file.
 
-## The rules: read what is served, never get past a guard
+**No store in it is finished, and a verdict there is a route, not a judgement.** The two hardest stores this
+site reads were written off as unreadable two or three times each, and both opened the moment somebody looked
+at where their grids were built instead of at their front doors again -- one of them now gives up 11,973
+products, with sizes and both prices, in twelve plain requests. So work down every route before you report
+anything negative, name the ones you tried, and if you spend them all, say what would open the store next. A
+report that writes a store off without naming the routes it tried is incomplete and will be sent back.
+
+## The rules: go wider, not harder
 
 - Plain requests only (curl or Python urllib), with an ordinary browser User-Agent and no cookies you had to
   earn. Use the same one as `build.py` (`UA` near the top).
-- If a host answers 403, 429, a challenge page ("Just a moment", "Access Denied", "Pardon Our Interruption",
-  a captcha, a JavaScript check) for a kind of address, that kind of address is closed on that host: record it
-  and move on. Two corrections are allowed first, because they fix a request that was wrong rather than get
-  past a guard -- asking with a browser-shaped `Accept` (see below), and asking for a smaller page. Beyond
-  that, do not hunt for a header, cookie or token that gets you in, and never ask twice as hard: every lasting
-  block recorded in `stores-unread.md` was earned by one greedy request.
+- When a host answers 403, 429 or a challenge page ("Just a moment", "Access Denied", "Pardon Our
+  Interruption", a captcha, a JavaScript check), **that address is closed and the store is not**. Record what
+  answered and take the next route on the list below; there are nine of them and each has read at least one
+  store an earlier route refused. Correct the request first if it was wrong -- a browser-shaped `Accept` when
+  you asked for a page (see below), a smaller page -- but then go wider rather than back. Asking the same
+  address twice as hard is the one move that loses a store for good: every lasting refusal in
+  `stores-unread.md` was earned by a single greedy request, and the store stopped serving anything after it.
 - No keys taken from mobile apps or private APIs, no proxies or address rotation, no logins.
 - **Send a browser-shaped `Accept` when you ask for a page.** `Accept: application/json` on an HTML request is
   a signature no browser has, and on its own it earns a 403 from some edges. Judge the body you get back, not
@@ -37,12 +45,18 @@ verdict did not try; say which. Report in a shape that can be folded into that f
   comes from, and you may read a page a browser rendered. That is reading what is served to a visitor. What you
   must still not do: solve or sit out a challenge to get at a page the store refused you, replay a session
   cookie or signed token you did not get honestly, rotate addresses, or sign in. If the store refuses the
-  browser too, the verdict is `guarded, address` and you stop. `tools/harvest.py` is the project's own browser
-  reader — look at how it is configured before writing your own.
+  browser too, that route is closed as well -- record what it answered and carry on down the list, because
+  what the pages will not give you the shop's search host, its other storefronts or its feeds often will.
+  `tools/harvest.py` is the project's own browser reader — look at how it is configured before writing your
+  own.
 - Read `robots.txt` once per host. Say whether the address you found is disallowed there. A disallowed address
   is reported, not recommended.
-- Be light: at most 12 requests per host, at least a second apart on the same host. Different hosts can be
-  asked at the same time.
+- Be light on any one host: at most 12 requests, at least a second apart. That is a budget per *route*, not
+  per store -- a store with five routes left in it is worth five rounds of twelve, and many hosts can be asked
+  at the same time, so breadth costs you almost nothing.
+- **Do not come back empty without a list.** If you spend every route on a store, the report says which ones
+  you spent and what would open it next: a header nobody has captured, a page nobody has rendered, a sibling
+  host nobody has looked for, a count nobody has taken. "It refused me" is not a finding.
 
 ## What to try, cheapest first
 
@@ -86,5 +100,7 @@ facts (`host`, `name`, `verdict`, `endpoint`, `platform`, `paging`, `products`, 
 - `nothing`: reachable, but no listing found. Say what you tried.
 - `wrong-address`: the host given is not the store; give the right one if you found it.
 
-Lead the report with a short table: store, verdict, endpoint. Do not edit `build.py`, `stores.json` or any
-other project file. Do not report an endpoint you did not actually fetch.
+Lead the report with a short table: store, verdict, endpoint. For every store you could not read, list the
+routes you tried and the routes still untried — that list is the useful half of the report, and the next
+attempt starts from it. Do not edit `build.py`, `stores.json` or any other project file. Do not report an
+endpoint you did not actually fetch.
