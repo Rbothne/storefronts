@@ -6,11 +6,21 @@ pages, so a store in stores.json with "browse": true and a "read" setting is rea
 
     "read": "woocommerce"   the WooCommerce Store API (/wp-json/wc/store/v1/products), whole catalogue as JSON
     "read": "netsuite"      a NetSuite SuiteCommerce shop's items API (/api/items), whole catalogue as JSON
+    "read": "algolia"       the search index the shop's own pages are built from, with the public search key it
+                            hands them: a thousand products a request, and no page to parse at all (Yoox,
+                            Miu Miu). "fields" says where each thing is in a hit.
+    "read": "harvest"       what a browser found at a store no plain request reaches at all: tools/harvest.py
+                            opens its pages on its own schedule and leaves the products in data/harvest/, and
+                            nothing is fetched here (Cettire)
     "read": "listing"       the store's own category pages ("pages"), page after page, products read from:
         "via": "ld"      the JSON-LD Product entries search engines are given
-        "via": "json"    the product list the page carries for its own scripts (__NEXT_DATA__ and the like)
+        "via": "json"    the product list the page carries for its own scripts (__NEXT_DATA__, an app-router
+                         payload, a tile's own data-product-info, a list the page hands its analytics)
         "via": "tiles"   the product tiles of the grid (data-pid="..."; Salesforce Commerce Cloud and others)
         "via": "links"   links to product pages ("link": a pattern of their address) and the prices after them
+
+Which of those a store wants, and which walls the ones that cannot be read ran into, are written down per store
+in stores-unread.md -- read that before probing a store again.
 
 Paging ("paging"): a template added to each page's address, "?start={start}&sz=48" (with "size": 48) or "?page={n}"
 (page 1 is the plain address), or "next" to follow the page's own rel="next" link; none reads one page per address.
