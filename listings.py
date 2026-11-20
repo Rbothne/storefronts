@@ -1040,27 +1040,58 @@ def facet_value(v):
     return v.title() if v and v == v.upper() and re.search(r"[A-Z]{3}", v) else v
 
 
+def index_sizes(v):
+    """The size labels in a hit's size field: a list of labels, or of objects with one ({"label": "TU"})."""
+    out = []
+    for e in v if isinstance(v, list) else []:
+        label = size_label(next((e[k] for k in ("label", "size", "value", "name", "code") if e.get(k)), "")) \
+            if isinstance(e, dict) else size_label(e)
+        if label and label not in out:
+            out.append(label)
+    return out
+
+
+def in_stock(value, said):
+    """Whether a hit says the product is to be had. A bool says it outright; a word needs the store to say which
+    words mean yes ("avail_true": "green|available", Miu Miu's traffic lights)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value and said:
+        return bool(re.search(said, value, re.I))
+    return None
+
+
 def algolia_item(hit, store):
     """One product out of a search index, described by "fields" in stores.json: a dotted path per field of the
-    site's own item ("price": "modelBestOfferByPrice.currentPrice"). "title" is a template over the same paths,
-    "product_url" and "image_url" templates over the product's id."""
+    site's own item ("price": "modelBestOfferByPrice.currentPrice"). "title" is a template over the same paths;
+    the address comes from a "url" field where the index holds one, else from the "product_url" template over the
+    product's id, and the photo from an "img" field or the "image_url" template."""
     fields = store.get("fields") or {}
     got = {k: dotted(hit, p) for k, p in fields.items()}
     price, was = num(got.get("price")), num(got.get("was"))
     pid = str(got.get("id") or hit.get("objectID") or "")
-    if not price or not pid:
+    path = got.get("url") if isinstance(got.get("url"), str) and got["url"] else ""
+    if store.get("product_url") and (pid or path):
+        # a template over the product's id, or over the path the index holds, where the shop's address needs more
+        # in front of it than the index says ("https://www.miumiu.com/us/en{path}")
+        url = store["product_url"].format(id=pid, path=path)
+    elif path:
+        url = urljoin("https://%s/" % store.get("feed", store["host"]), path)
+    else:
+        url = None
+    if not price or not url:
         return None
     title = re.sub(r"\s+", " ", re.sub(r"\{([\w.]+)\}", lambda m: facet_value(dotted(hit, m.group(1))) or "",
                                        store.get("title", "") or "")).strip()
-    sizes = [s for s in (size_label(s) for s in (got.get("sizes") or [])) if s] if \
-        isinstance(got.get("sizes"), list) else []
-    return {"title": title or facet_value(got.get("ptype")) or pid,
-            "url": store["product_url"].format(id=pid),
-            "img": store.get("image_url", "").format(id=pid, head=pid[:2].lower()),
+    img = got.get("img") if isinstance(got.get("img"), str) else ""
+    if not img and store.get("image_url") and pid:
+        img = store["image_url"].format(id=pid, head=pid[:2].lower())
+    return {"title": title or facet_value(got.get("ptype")) or pid, "url": url,
+            "img": urljoin(url, img) if img else "",
             "price": price, "was": was if was and was > price else None,
             "cur": str(got.get("cur") or ""),
-            "avail": got.get("avail") if isinstance(got.get("avail"), bool) else None,
-            "sizes": sizes, "brand": facet_value(got.get("brand")),
+            "avail": in_stock(got.get("avail"), store.get("avail_true")),
+            "sizes": index_sizes(got.get("sizes")), "brand": facet_value(got.get("brand")),
             "ptype": facet_value(got.get("ptype"))}
 
 
