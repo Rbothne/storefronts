@@ -1005,7 +1005,9 @@ function setup() {
     $("tabs").append(btn);
   }
   buildCats();
-  document.addEventListener("click", e => { if ($("cats").open && !$("cats").contains(e.target)) $("cats").open = false; });
+  // A click outside the menu closes it. composedPath is where the click landed: a click in the panel redraws it,
+  // so by now the thing clicked may have left the page, and contains() would call that an outside click.
+  document.addEventListener("click", e => { if ($("cats").open && !e.composedPath().includes($("cats"))) $("cats").open = false; });
   const stores = [...new Map(DATA.items.map(i => [i.store, i.store_name])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
   $("store").append(new Option("All stores", ""), ...stores.map(([h, n]) => new Option(n, h)));
   fillCatMenus();
