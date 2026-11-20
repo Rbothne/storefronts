@@ -149,16 +149,24 @@ def probe(t):
     for name, pat in OTHER.items():
         if re.search(pat, page, re.I):
             out["routes"].append("search platform: " + name)
-    if re.search(r'"@type"\s*:\s*"(Product|ItemList)"', page):
-        out["routes"].append("JSON-LD")
-    if "__NEXT_DATA__" in page:
-        out["routes"].append("__NEXT_DATA__")
-    if "__next_f.push" in page:
-        out["routes"].append("app-router payload")
-    if re.search(r'data-(pid|product-id|itemid)=', page):
-        out["routes"].append("tiles with ids")
-    if re.search(r'data-(product-info|tracking|tealium)=', page):
-        out["routes"].append("tile carries JSON")
+    # A framework being present is not products being present: Mango, ba&sh, Comoli, Hive & Colony and White
+    # House Black Market all carry an app-router payload and not one price between them. So every claim about
+    # page data is conditioned on the page actually pricing something.
+    priced = len(re.findall(r'"(?:price|salePrice|currentPrice|listPrice|regularPrice)"', page)) >= 5 or         len(re.findall(r'[$£€]\s?\d{1,4}[.,]\d\d', page)) >= 5
+    out["priced page"] = priced
+    if priced:
+        if re.search(r'"@type"\s*:\s*"(Product|ItemList)"', page):
+            out["routes"].append("JSON-LD")
+        if "__NEXT_DATA__" in page:
+            out["routes"].append("__NEXT_DATA__")
+        if "__next_f.push" in page:
+            out["routes"].append("app-router payload")
+        if re.search(r'data-(pid|product-id|itemid)=', page):
+            out["routes"].append("tiles with ids")
+        if re.search(r'data-(product-info|tracking|tealium)=', page):
+            out["routes"].append("tile carries JSON")
+    elif re.search(r'__next_f\.push|__NEXT_DATA__|data-(pid|product-id|itemid)=', page):
+        out["routes"].append("framework present but the page prices nothing")
     if "/wp-json/wc/store" in page:
         out["routes"].append("WooCommerce")
 
