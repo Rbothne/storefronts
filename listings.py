@@ -678,8 +678,27 @@ def from_tiles(page, base, store):
                     "avail": bool(sizes) if store.get("size_stock") and sized else
                              attrs.get("avail", sold(store, chunk)),
                     "sizes": sizes, "brand": class_text(store, "brand_class", chunk),
-                    "ptype": attrs.get("ptype", "")})
+                    "ptype": tile_type(store, chunk) or attrs.get("ptype", "")})
     return out
+
+
+def tile_type(store, chunk):
+    """What a tile's own tracking data calls its product: "tile_type" in stores.json names the attribute that holds
+    it as JSON ("gtag" for data-gtag='{"brand": "Cotton On Men", "category": "Cotton On/SALE/Men/Tops", ...}',
+    Cotton On's grid). The brand line and the category stand as the product's type, which is how a tile on a
+    sale page that mixes men's, women's and kids' says whose it is."""
+    if not store.get("tile_type"):
+        return ""
+    for m in re.finditer(r"""\bdata-%s=(?:"([^"]*)"|'([^']*)')""" % re.escape(store["tile_type"]), chunk, re.I):
+        try:
+            data = json.loads(htmllib.unescape(m.group(1) or m.group(2)))
+        except ValueError:
+            continue
+        if isinstance(data, dict):
+            said = [data.get(k) for k in ("brand", "category")]
+            if any(isinstance(v, str) and v for v in said):
+                return " ".join(v for v in said if isinstance(v, str) and v)
+    return ""
 
 
 def tile_json(store, chunk):
