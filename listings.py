@@ -16,6 +16,11 @@ Paging ("paging"): a template added to each page's address, "?start={start}&sz=4
 (page 1 is the plain address), or "next" to follow the page's own rel="next" link; none reads one page per address.
 A listing stops at the first page that brings no product not seen already.
 
+The size labels a listing prints are read too, and the sold-out ones left out, so an item on the site says what
+is still in stock: from a store's own product data (a list of sizes), from the variants of a JSON-LD Product, or
+from the size swatches of a tile ("size_class" in stores.json names the store's element for one size when the
+usual data-size attributes are not there).
+
 Every address is checked against the robots.txt of its host first (wildcards included), and skipped when it is
 disallowed. Several stores allow their category pages but not the faster forms of them their own scripts use
 (Search-UpdateGrid, ?format=json, ?sz=300); this keeps the build on the allowed side.
@@ -122,6 +127,107 @@ def money(text):
     return [x for x in out if x > 0]
 
 
+def page_currency(page):
+    """The currency a page names for the prices it prints, for the grids that print the amount alone. The site
+    falls back to the store's "currency" when a page names none."""
+    for rx in (r'"priceCurrency"\s*:\s*"([A-Z]{3})"',
+               r'itemprop="priceCurrency"[^>]*content="([A-Z]{3})"',
+               r'content="([A-Z]{3})"[^>]*itemprop="priceCurrency"',
+               r'property="(?:og:|product:)price:currency"[^>]*content="([A-Z]{3})"'):
+        m = re.search(rx, page)
+        if m:
+            return m.group(1)
+    return ""
+
+
+# ---------------------------------------------------------------- sizes a listing prints
+
+# a label that is a size, not a colour or a quantity: XS, 10, 32x34, 9.5, 27.5cm, UK 8, One Size, 1 SZ
+SIZE_LABEL = re.compile(r"(?i)^(?:(?:[2-5]?x+)?s|m|(?:[2-5]?x+)?l|o/?s|one ?size|1 ?sz|no ?size|uni|free"
+                        r"|[0-9]{1,3}(?:[.,][05])?(?:\s?(?:cm|mm|in|us|uk|eu|w|l)\b)?(?:\s?[x/-]\s?[0-9]{1,3})?"
+                        r"|[0-9]{1,2}[a-ehjk]{1,3})$")
+# a swatch the grid prints struck through or greyed: that size is gone
+SIZE_GONE = re.compile(r"(?i)unavailable|out-?of-?stock|sold-?out|soldout|notavailable|not-available|disabled"
+                       r"|unselectable|crossed|strike|line-through|\boos\b")
+# a swatch for something else: grids hang colours on the same attributes (data-attr-id="color")
+SIZE_OTHER = re.compile(r"""(?i)\bdata-attr(?:-id|ibute)?=["'](?!size)""")
+# attributes a grid hangs a size on
+SIZE_ATTR = re.compile(r"""(?i)<(\w+)\b([^>]*\bdata-(?:size|size-value|sizevalue|attr-value|variation-size)"""
+                       r"""=["']([^"']{1,16})["'][^>]*)>""")
+
+
+def size_label(t):
+    t = re.sub(r"\s+", " ", htmllib.unescape(str(t or ""))).strip().strip("()")
+    return t if 1 <= len(t) <= 16 and SIZE_LABEL.match(t) else ""
+
+
+def html_sizes(store, chunk):
+    """The sizes a tile prints that it does not mark gone. "size_class" in stores.json names the store's element
+    for one size; otherwise the data-size attributes grids usually hang a size on are read."""
+    out = []
+    if store.get("size_class"):
+        rx = re.compile(r"""<(\w+)\b([^>]*class=["'](?:[^"']*\s)?%s(?:\s[^"']*)?["'][^>]*)>(.*?)</\1>"""
+                        % re.escape(store["size_class"]), re.I | re.S)
+        found = [(m.group(2), size_label(text_of(m.group(3)))) for m in rx.finditer(chunk)]
+    else:
+        found = [(m.group(2), size_label(m.group(3))) for m in SIZE_ATTR.finditer(chunk)]
+    for attrs, label in found:
+        if label and not SIZE_GONE.search(attrs) and not SIZE_OTHER.search(attrs) and label not in out:
+            out.append(label)
+    return out
+
+
+def size_gone(e):
+    """True when a size entry in a product's data says that size is not to be had."""
+    if not isinstance(e, dict):
+        return False
+    if e.get("forceOutOfStock") or e.get("soldOut") or e.get("outOfStock"):
+        return True
+    said = [e.get(n) for n in ("available", "inStock", "isInStock", "orderable", "selectable", "purchasable")
+            if isinstance(e.get(n), bool)]
+    if said and not any(said):
+        return True
+    return bool(re.search(r"(?i)out|sold|unavailable", str(e.get("availability") or e.get("stockState") or "")))
+
+
+def size_list(d, depth=0):
+    """Whether a product's data holds a list of sizes at all, empty or not. A listing that keeps every size it has
+    says, by keeping none, that a garment has gone; a product sold in one size says nothing by it."""
+    for k, v in d.items() if isinstance(d, dict) else []:
+        if isinstance(v, (list, dict)) and re.search(r"(?i)sizes?$|sizes?[_A-Z]", str(k)):
+            return True
+        if isinstance(v, dict) and depth < 2 and size_list(v, depth + 1):
+            return True
+    return False
+
+
+def json_sizes(d, depth=0):
+    """The sizes in a product's own data: under a key that says sizes, either a list (of labels or of objects
+    with one) or an object filed by label. A size the data marks out of stock is left out; a list of colours or
+    of whole variants is not read."""
+    out = []
+    for k, v in d.items() if isinstance(d, dict) else []:
+        is_sizes = re.search(r"(?i)sizes?$|sizes?[_A-Z]", str(k))
+        if isinstance(v, dict) and is_sizes and len(v) <= 60:
+            out += [s for s in (size_label(label) for label, e in v.items() if not size_gone(e)) if s]
+        elif isinstance(v, dict) and depth < 2:
+            out += json_sizes(v, depth + 1)
+        elif isinstance(v, list) and is_sizes and len(v) <= 60:
+            for e in v:
+                label = size_label(e) if isinstance(e, (str, int, float)) else ""
+                if isinstance(e, dict):
+                    if size_gone(e):
+                        continue
+                    label = next((size_label(e[n]) for n in ("size", "sizeLabel", "label", "value", "name",
+                                                             "displayValue", "title") if e.get(n)), "")
+                out.append(label)
+    seen = []
+    for s in out:
+        if s and s not in seen:
+            seen.append(s)
+    return seen
+
+
 def canon(url):
     """An address without its fragment and the query listings add (?source=plp, colour choices), to tell whether
     two listings show the same product. A query that names the product (?pid=, ?product_id=) is kept."""
@@ -188,16 +294,65 @@ def ld_item(node, base):
                                                   "backorder") for s in states) if states else None
     brand = node.get("brand")
     brand = brand.get("name") if isinstance(brand, dict) else brand if isinstance(brand, str) else ""
+    # the original price, where an offer gives one: a list price beside the asking price, or the top of a range
+    was = [num(o.get(k)) for o in flat for k in ("listPrice", "highPrice")]
+    for o in flat:
+        spec = o.get("priceSpecification")
+        for sp in (spec if isinstance(spec, list) else [spec]):
+            if isinstance(sp, dict) and "list" in str(sp.get("priceType", "")).lower():
+                was.append(num(sp.get("price")))
+    was = max([w for w in was if w], default=None)
     return {"title": name, "url": urljoin(base, url), "img": urljoin(base, image) if isinstance(image, str) else "",
-            "price": price, "was": None, "cur": str(offer.get("priceCurrency") or ""), "avail": avail,
+            "price": price, "was": was if was and was > price else None,
+            "cur": str(offer.get("priceCurrency") or ""), "avail": avail, "sizes": ld_sizes(node),
             "brand": brand or "", "ptype": str(node.get("category") or "")}
+
+
+def ld_sizes(node):
+    """The sizes of a JSON-LD Product: the "size" of each variant still offered."""
+    out = []
+    for v in node.get("hasVariant") or []:
+        if not isinstance(v, dict):
+            continue
+        offers = v.get("offers") if isinstance(v.get("offers"), list) else [v.get("offers")]
+        states = [str(o.get("availability", "")) for o in offers if isinstance(o, dict) and o.get("availability")]
+        if states and not any(s.rsplit("/", 1)[-1].lower().startswith(("instock", "limited", "preorder", "presale",
+                                                                       "backorder", "online")) for s in states):
+            continue
+        size = v.get("size")
+        size = size.get("name") if isinstance(size, dict) else size
+        label = size_label(size)
+        if label and label not in out:
+            out.append(label)
+    return out
 
 
 # ---------------------------------------------------------------- the page's own product data
 
+def flight(page):
+    """The lists of products in a Next.js app-router payload (the self.__next_f.push([1,"..."]) calls), which
+    carries a page's own data as runs of text rather than as one JSON block. The runs are joined back together
+    and every list of objects in them is read out: "products":[{...},{...}] and its like."""
+    parts = []
+    for m in re.finditer(r"__next_f\.push\(\[\s*1\s*,\s*(\".*?\")\s*\]\)", page, re.S):
+        try:
+            parts.append(json.loads(m.group(1)))
+        except ValueError:
+            pass
+    body, dec = "".join(parts), json.JSONDecoder()
+    for m in re.finditer(r"[:,]\s*(?=\[\s*\{)", body):
+        try:
+            value, _ = dec.raw_decode(body, m.end())
+        except ValueError:
+            continue
+        if isinstance(value, list) and len(value) > 2:
+            yield value
+
+
 def embedded(page):
     """Every sizeable JSON value a page embeds for its scripts: <script type="application/json"> (Next.js's
-    __NEXT_DATA__ among them) and assignments like window.__PRELOADED_STATE__ = {...}."""
+    __NEXT_DATA__ among them), assignments like window.__PRELOADED_STATE__ = {...}, and the rows of an
+    app-router payload."""
     for m in re.finditer(r"<script\b[^>]*type=[\"']application/(?:json|x-json)[\"'][^>]*>(.*?)</script>", page, re.S | re.I):
         try:
             yield json.loads(m.group(1).strip())
@@ -211,16 +366,21 @@ def embedded(page):
             continue
         if end - m.end() > 2000 and isinstance(value, (dict, list)):
             yield value
+    yield from flight(page)
 
 
-NAME_KEYS = ("name", "title", "productName", "displayName", "product_name", "styleName", "displayname",
-             "storedisplayname2")
+# the name of the product, most telling first: a grid's data can hold both the product's name and the name of
+# the colour of one entry ("name": "Pink Aster", "productName": "Agnes Skirted Shift Romper")
+NAME_KEYS = ("productName", "product_name", "styleName", "displayName", "displayname", "storedisplayname2",
+             "name", "title")
 URL_KEYS = ("url", "productPageUrl", "urlPath", "path", "permalink", "productUrl", "pdpUrl", "href", "link", "slug",
             "handle", "fullUrl", "absUrl")
 # a price field's name says which price it is: compare-at, original, list ... is the "was" price
 WAS_KEY = re.compile(r"compare|original|list|regular|base|old|retail|standard|strike|was|full|msrp", re.I)
 NOW_KEY = re.compile(r"sale|discount|final|current|offer|effective|special|now|promo|selling|customer", re.I)
-NOT_PRICE = re.compile(r"member|loyalty|per_?unit|installment|klarna|afterpay|shipping|tax|percent|saving|max", re.I)
+# a price for something other than the product: a membership rate, an instalment, an extra, a basket total
+NOT_PRICE = re.compile(r"member|loyalty|per_?unit|installment|klarna|afterpay|shipping|tax|percent|saving|max"
+                       r"|monogram|engrav|total|bundle|add_?on|gift_?wrap|deposit", re.I)
 # parts of a product's data that hold other things' prices (its variants, related products)
 SKIP_TREE = re.compile(r"^(?:(?:selected)?variants?|variations?|swatch(?:es)?|colou?rs?|sizes?|children|related\w*"
                        r"|recommend\w*|bundles?)$", re.I)
@@ -241,26 +401,116 @@ def price_fields(d, path="", depth=0, out=None):
     return out
 
 
-def json_item(d, base, store):
-    if isinstance(d.get("product"), dict) and not any(isinstance(d.get(k), str) for k in NAME_KEYS):
-        # a search hit: its prices beside the product they are for (Rolla's)
-        d = {**d["product"], **{k: v for k, v in d.items() if k != "product"}}
-    name =next((clean_title(d[k]) for k in NAME_KEYS if isinstance(d.get(k), str) and clean_title(d[k])), None)
-    url = next((d[k] for k in URL_KEYS if isinstance(d.get(k), str) and d[k].strip()), None)
-    if not url and store.get("product_url") and isinstance(d.get("productId"), str):
-        # Salesforce's composable storefronts keep a product's id, not its address: "/us/en/product/{id}"
-        url = store["product_url"].format(id=d["productId"])
-    if not name or not url:
-        return None
-    fields = price_fields(d)
-    if not fields:
-        return None
+IMG_KEYS = ("url", "src", "urlOriginal", "disBaseLink", "link", "imageDefault", "imageUrl", "href", "path",
+            "contentUrl", "default")
+
+
+def picture(v, depth=0):
+    """The first photo address in a product's image field, however the shop wraps it: a string, an object with
+    an address under one of the usual names, or a list of either."""
+    if isinstance(v, str):
+        return v if re.search(r"(?i)^(https?:)?//|^/|\.(jpe?g|png|webp|avif)", v) and not BADGE.search(v) else ""
+    if depth >= 3:
+        return ""
+    if isinstance(v, dict):
+        return next((p for p in (picture(v.get(k), depth + 1) for k in IMG_KEYS) if p), "")
+    if isinstance(v, list):
+        return next((p for p in (picture(x, depth + 1) for x in v[:12]) if p), "")
+    return ""
+
+
+def split_prices(fields):
+    """(what is asked now, the original price) from the prices found in a product's data: a field whose name says
+    compare-at, original, list ... is the original, and the lowest of the rest is what is asked."""
     is_was = lambda p: WAS_KEY.search(p) and not NOW_KEY.search(p.rsplit(".", 1)[-1])
     was, now = [n for p, n in fields if is_was(p)], [n for p, n in fields if not is_was(p)]
     if not now:
         now, was = was, []
     price = min(now)
-    was = max(was) if was and max(was) > price else None
+    return price, (max(was) if was and max(was) > price else None)
+
+
+def json_by_id(page):
+    """What a page's own data says about each product id in it: a grid that prints no price in its tiles can
+    still hand its analytics the list of what it shows ("impressions": [{"productID": ..., "price": ...}],
+    Johnny Was). Used to price such a tile."""
+    out = {}
+    for value in embedded(page):
+        stack = [value]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, list):
+                stack.extend(node)
+                continue
+            if not isinstance(node, dict):
+                continue
+            stack.extend(v for v in node.values() if isinstance(v, (dict, list)))
+            ids = [str(node[k]) for k in ("productID", "productId", "product_id", "id", "pid", "sku", "itemid")
+                   if isinstance(node.get(k), (str, int)) and not isinstance(node.get(k), bool)]
+            fields = price_fields(node)
+            if not ids or not fields:
+                continue
+            price, was = split_prices(fields)
+            it = {"price": price, "was": was,
+                  "title": next((clean_title(node[k]) for k in NAME_KEYS
+                                 if isinstance(node.get(k), str) and clean_title(node[k])), ""),
+                  "cur": next((node[k] for k in ("currency", "currencyCode", "priceCurrency")
+                               if isinstance(node.get(k), str)), ""),
+                  "ptype": node.get("category") if isinstance(node.get("category"), str) else ""}
+            for i in ids:
+                out.setdefault(i.lower(), it)
+    return out
+
+
+def by_id(table, pid):
+    """What `table` holds for this tile's id, by the id itself or by the part of it before the colour
+    ("d31326-o-ivoni" is colour "ivoni" of product "d31326-o")."""
+    pid = pid.lower()
+    if pid in table:
+        return table[pid]
+    keys = [k for k in table if pid.startswith(k) and len(k) > 3]
+    return table[max(keys, key=len)] if keys else None
+
+
+def deep_picture(v, depth=0):
+    """Any product photo in a product's data, wherever the shop filed it: J.Jill keeps the grid's thumbnail as a
+    reference its scripts resolve, but the photo of each colour it sells is there in full. Used only when the
+    usual image fields hold nothing."""
+    if isinstance(v, str):
+        return v if re.search(r"(?i)\.(jpe?g|png|webp|avif)(\?|$)", v) and not BADGE.search(v) else ""
+    if depth >= 4:
+        return ""
+    for x in (list(v.values()) if isinstance(v, dict) else v if isinstance(v, list) else [])[:20]:
+        found = deep_picture(x, depth + 1)
+        if found:
+            return found
+    return ""
+
+
+def json_item(d, base, store):
+    if isinstance(d.get("product"), dict) and not any(isinstance(d.get(k), str) for k in NAME_KEYS):
+        # a search hit: its prices beside the product they are for (Rolla's)
+        d = {**d["product"], **{k: v for k, v in d.items() if k != "product"}}
+    name =next((clean_title(d[k]) for k in NAME_KEYS if isinstance(d.get(k), str) and clean_title(d[k])), None)
+    if not name:
+        # shops that file the words of a product apart from its prices: {"content": {"title": ...}} (Burberry)
+        for box in ("content", "fields", "attributes", "details", "info", "text"):
+            inner = d.get(box)
+            if isinstance(inner, dict):
+                name = name or next((clean_title(inner[k]) for k in NAME_KEYS
+                                     if isinstance(inner.get(k), str) and clean_title(inner[k])), None)
+    url = next((d[k] for k in URL_KEYS if isinstance(d.get(k), str) and d[k].strip()), None)
+    if not url and store.get("product_url"):
+        # Salesforce's composable storefronts keep a product's id, not its address: "/us/en/product/{id}"
+        pid = next((str(d[k]) for k in ("productId", "product_id", "masterId", "id", "sku")
+                    if isinstance(d.get(k), (str, int)) and not isinstance(d.get(k), bool)), None)
+        url = store["product_url"].format(id=pid) if pid else None
+    if not name or not url:
+        return None
+    fields = price_fields(d)
+    if not fields:
+        return None
+    price, was = split_prices(fields)
     if "://" not in url and not url.startswith("/"):
         url = (store.get("product_path") or "/") + url
     cur = next((d[k] for k in ("currency", "currencyCode", "priceCurrency") if isinstance(d.get(k), str)), "")
@@ -279,16 +529,25 @@ def json_item(d, base, store):
     inv = d.get("inventory")
     if isinstance(inv, dict) and isinstance(inv.get("isInStock"), bool):
         avail = inv["isInStock"]
+    for box in ("types", "flags", "status", "stock"):      # {"types": {"isSoldOut": false}} (Burberry)
+        inner = d.get(box)
+        if isinstance(inner, dict):
+            for k in ("isSoldOut", "soldOut", "outOfStock"):
+                if isinstance(inner.get(k), bool):
+                    avail = not inner[k]
+            for k in ("isInStock", "inStock", "available", "orderable"):
+                if isinstance(inner.get(k), bool):
+                    avail = inner[k]
     brand = d.get("brand") or d.get("vendor") or ""
     brand = brand.get("name", "") if isinstance(brand, dict) else brand if isinstance(brand, str) else ""
     img = ""
-    for k in ("image", "featuredImage", "defaultImage", "img", "imageUrl", "thumbnail", "featuredMedia"):
-        v = d.get(k)
-        if isinstance(v, dict):
-            v = v.get("url") or v.get("src") or v.get("urlOriginal") or v.get("disBaseLink") or v.get("link")
-        if isinstance(v, str) and v:
-            img = v
-            break
+    for k, v in d.items():
+        # a photo under any of the names shops give one: a string, an object, or a list of either. The key can
+        # carry the query a GraphQL cache asks it with: images({"first":2}) (Figs).
+        if not re.match(r"(?i)(image|img|photo|media|thumb|picture)", str(k)) or img:
+            continue
+        img = picture(v)
+    img = img or deep_picture(d)
     if store.get("image"):
         # a store whose product data names its photo by an id or a path: "image" is where (dotted keys),
         # "image_url" the address it goes into ("https://img.abercrombie.com/is/image/anf/{}")
@@ -299,7 +558,8 @@ def json_item(d, base, store):
             img = store.get("image_url", "{}").format(v)
     ptype = d.get("productType") or d.get("product_type") or d.get("category") or ""
     return {"title": name, "url": urljoin(base, url), "img": urljoin(base, img) if img else "", "price": price,
-            "was": was, "cur": cur, "avail": avail, "brand": brand, "ptype": ptype if isinstance(ptype, str) else ""}
+            "was": was, "cur": cur, "avail": avail, "sizes": json_sizes(d), "brand": brand,
+            "ptype": ptype if isinstance(ptype, str) else ""}
 
 
 def from_json(page, base, store):
@@ -334,7 +594,8 @@ NAMES = [re.compile(p, re.I | re.S) for p in (
     r"<img\b[^>]*\balt=\"([^\"]{3,140})\"",
 )]
 # not a product photo
-BADGE = re.compile(r"^data:|badge|[/_.-](?:icons?|logo|sprite)[/_.-]|placeholder|spacer|\.svg|\.gif", re.I)
+BADGE = re.compile(r"^data:|badge|swatch|[/_.-](?:icons?|logo|sprite)[/_.-]|placeholder|spacer"
+                   r"|\.svg|\.gif", re.I)
 SKIP_HREF = re.compile(r"wishlist|quickview|quick-view|login|cart|javascript:|mailto:|/account", re.I)
 
 
@@ -348,11 +609,16 @@ def from_tiles(page, base, store):
         seen.add(pid)
         end = next((a for a, p in marks[n + 1:] if p != pid), min(len(page), at + 20000))
         tiles.append((pid, page[max(0, at - 300):min(end, at + 20000)]))
-    out = []
+    out, table = [], None
     for pid, chunk in tiles:
         url = next((h for h in HREF.findall(chunk) if not SKIP_HREF.search(h)), None)
         if not url:
             continue
+        said = None
+        if store.get("tile_ids"):
+            # a grid that prints no price in its tiles but lists what it shows in the page's own data, by id
+            table = json_by_id(page) if table is None else table
+            said = by_id(table, pid)
         title = ""
         for rx in NAMES:
             title = next((clean_title(m) for m in rx.findall(chunk) if clean_title(m)), "")
@@ -360,13 +626,93 @@ def from_tiles(page, base, store):
                 break
         title = title or next((t for t in (bare(text_of(m.group(2))) for m in NAMED.finditer(chunk))
                                if t and len(t) < 160), "")
-        prices = price_text(chunk, store)
+        attrs = {**tile_attrs(chunk), **(said or {}), **tile_json(store, chunk)}
+        from_attrs = {"price": attrs["price"], "was": attrs.get("was")} if attrs.get("price") else None
+        printed = price_text(chunk, store)
+        prices = ((from_attrs if store.get("tile_json") or store.get("tile_ids") else None)
+                  or printed or from_attrs)
         if not prices:
             continue
+        for was in (attrs.get("was"), (printed or {}).get("was")):   # an original price from wherever it is to be had
+            if prices["was"] is None and was and was > prices["price"]:
+                prices["was"] = was
+        title = (attrs.get("title") or title) if store.get("tile_json") or store.get("tile_ids") else \
+                title or attrs.get("title", "")
         img = first_image(chunk)
+        sizes = html_sizes(store, chunk) or attrs.get("sizes") or []
+        sized = attrs["sized"] if "sized" in attrs else bool(SIZE_ATTR.search(chunk))
         out.append({"title": title or pid, "url": urljoin(base, htmllib.unescape(url)),
-                    "img": urljoin(base, htmllib.unescape(img)) if img else "", **prices, "cur": "",
-                    "avail": sold(store, chunk), "brand": "", "ptype": ""})
+                    "img": urljoin(base, htmllib.unescape(img)) if img else "", **prices,
+                    "cur": attrs.get("cur", ""),
+                    # a grid that lists every size it has left says, by listing none, that the garment is gone
+                    "avail": bool(sizes) if store.get("size_stock") and sized else
+                             attrs.get("avail", sold(store, chunk)),
+                    "sizes": sizes, "brand": class_text(store, "brand_class", chunk),
+                    "ptype": attrs.get("ptype", "")})
+    return out
+
+
+def tile_json(store, chunk):
+    """A tile that carries its product's own data as JSON in an attribute: "tile_json" in stores.json names the
+    attribute ("product-info" for data-product-info="{...}", Lilly Pulitzer's grid). The name, the two prices and
+    the sizes are read from it; the address and the photo still come from the tile itself. The data of a tile with
+    several colours holds one entry per colour, and the cheapest is taken, as elsewhere."""
+    if not store.get("tile_json"):
+        return {}
+    m = re.search(r"""\bdata-%s=(?:"([^"]*)"|'([^']*)')""" % re.escape(store["tile_json"]), chunk, re.I)
+    if not m:
+        return {}
+    try:
+        data = json.loads(htmllib.unescape(m.group(1) or m.group(2)))
+    except ValueError:
+        return {}
+    found = []
+
+    def walk(node, depth=0):
+        if depth > 8:
+            return
+        if isinstance(node, list):
+            for v in node:
+                walk(v, depth + 1)
+            return
+        if not isinstance(node, dict):
+            return
+        before = len(found)
+        for v in node.values():
+            walk(v, depth + 1)
+        if len(found) == before:
+            it = json_item({**node, "url": "/"}, "http://tile/", store)
+            if it:
+                found.append((it, node))
+
+    walk(data)
+    if not found:
+        return {}
+    best, node = min(found, key=lambda pair: pair[0]["price"])
+    got = {k: best[k] for k in ("title", "price", "was", "sizes", "avail") if best[k] not in (None, "", [])}
+    # whether this product comes in sizes at all: a bag with none is not a garment that has sold out of them
+    got["sized"] = size_list(node)
+    return got
+
+
+def tile_attrs(chunk):
+    """What a tile hangs on its own attributes rather than printing: data-product-price, -listprice,
+    -availability, -name (Tory Burch's grid and others built the same way). Empty for a tile with none.
+    Only used to fill in what the tile does not print."""
+    got = {}
+    for m in re.finditer(r"""(?i)\bdata-(?:product-)?(listprice|list-price|standard-?price|regular-?price"""
+                         r"""|sale-?price|price|availability|name)=["']([^"']{0,140})["']""", chunk):
+        got.setdefault(m.group(1).lower().replace("-", ""), m.group(2))
+    out = {}
+    price = num(got.get("price") or got.get("saleprice"))
+    was = num(got.get("listprice") or got.get("standardprice") or got.get("regularprice"))
+    if price:
+        out["price"] = price
+        out["was"] = was if was and was > price else None
+    if got.get("availability"):
+        out["avail"] = not re.search(r"(?i)out|sold|unavailable|backorder|preorder", got["availability"])
+    if got.get("name"):
+        out["title"] = clean_title(got["name"])
     return out
 
 
@@ -439,7 +785,8 @@ def first_image(chunk):
         for attr in ("data-src", "data-original", "data-lazy-src", "data-srcset", "srcset", "src"):
             m = re.search(r"\b%s=[\"']([^\"' ]+)" % attr, tag, re.I)
             if m and not BADGE.search(m.group(1)):
-                return htmllib.unescape(m.group(1))
+                # the first address of a srcset, without the comma that separates it from the next
+                return htmllib.unescape(m.group(1)).rstrip(",")
     m = re.search(r"background-image:\s*url\(['\"]?([^'\")]+)", chunk, re.I)
     return htmllib.unescape(m.group(1)) if m and not BADGE.search(m.group(1)) else ""
 
@@ -471,8 +818,11 @@ def from_links(page, base, store):
         seen.add(g["url"])
         title = link_title(store, g["parts"], chunk)
         img = first_image(chunk)
+        sizes = html_sizes(store, chunk)
         out.append({"title": title, "url": g["url"], "img": urljoin(base, img) if img else "", **prices, "cur": "",
-                    "avail": sold(store, chunk), "brand": class_text(store, "brand_class", chunk), "ptype": ""})
+                    "avail": bool(sizes) if store.get("size_stock") and SIZE_ATTR.search(chunk)
+                             else sold(store, chunk),
+                    "sizes": sizes, "brand": class_text(store, "brand_class", chunk), "ptype": ""})
     return out
 
 
@@ -487,12 +837,21 @@ def products(page, base, store):
     found = VIA[store.get("via", "ld")](page, base, store)
     if store.get("skip"):
         found = [it for it in found if not re.search(store["skip"], it["title"] + " " + it["url"], re.I)]
-    if store.get("via", "ld") in ("ld", "json") and any(it["was"] is None for it in found):
-        struck = {canon(t["url"]): t for t in from_tiles(page, base, store) if t["was"]}
+    if store.get("via", "ld") in ("ld", "json") and any(it["was"] is None or not it["sizes"] for it in found):
+        # what the tiles of the same page show about a product the data left out
+        tiles = {canon(t["url"]): t for t in from_tiles(page, base, store)}
         for it in found:
-            t = struck.get(canon(it["url"]))
-            if it["was"] is None and t and abs(t["price"] - it["price"]) < 0.01:
+            t = tiles.get(canon(it["url"]))
+            if not t or abs(t["price"] - it["price"]) > 0.01:
+                continue
+            if it["was"] is None and t["was"]:
                 it["was"] = t["was"]
+            it["sizes"] = it["sizes"] or t["sizes"]
+    cur = ""
+    for it in found:
+        if not it["cur"]:
+            cur = cur or page_currency(page)
+            it["cur"] = cur
     return found
 
 
