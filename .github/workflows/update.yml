@@ -14,7 +14,7 @@ on:
         type: choice
         options: [full, cycle]
         default: full
-  push:                         # a change to the page republishes it; a change to the stores or the build refreshes everything
+  push:                         # a change to the page republishes it; a change to the stores or the build runs a cycle
     branches: [main]
     paths: ["docs/**", "build.py", "history.py", "listings.py", "stores.json", ".github/workflows/update.yml"]
 
@@ -53,9 +53,12 @@ jobs:
                   changed = set(subprocess.run(["git", "diff", "--name-only", e["before"], "HEAD"], check=True,
                                                capture_output=True, text=True).stdout.split())
               except Exception:
-                  changed = {"build.py"}             # can't tell: refresh everything to be safe
+                  changed = {"build.py"}             # can't tell: treat it as a change to the build
               rebuild = {"build.py", "history.py", "listings.py", "stores.json", ".github/workflows/update.yml"}
-              mode = "full" if changed & rebuild else "publish"
+              # A change to the build or the stores is a cycle run, not a refresh of every store: several pushes
+              # in an hour each re-read all 290 stores, and the stores began refusing the runs (HTTP 429).
+              # New stores have never been read, so a cycle takes them first.
+              mode = "cycle" if changed & rebuild else "publish"
           elif event == "schedule" and e.get("schedule") == "37 * * * *":
               mode = "cycle"
           elif event == "workflow_dispatch" and (e.get("inputs") or {}).get("mode") == "cycle":

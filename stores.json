@@ -2,7 +2,7 @@
   "settings": {
     "min_discount": 20,
     "max_pages": 65,
-    "workers": 12,
+    "workers": 6,
     "delay_seconds": 1.0
   },
   "stores": [
