@@ -984,15 +984,10 @@ def main():
            "limited": len(limited), "still_limited": still, "failed": sum(1 for s in status if not s["ok"]),
            "lanes": settings.get("workers", 6)}
     history.write_metrics(state, cfg, NOW, run)
-    # Stores that are not read whole still get a link from the page's brand lookup: a retailer's own search
-    # ("search" in stores.json; {q} stands for the search words), or the front page of a brand's own shop.
-    elsewhere = [{"name": s["name"], "search": s["search"]} if s.get("search") else {"name": s["name"], "home": "https://" + h}
-                 for h, s in stores.items() if s.get("group") == "clothing" and (s.get("search") or s["platform"] != "shopify")]
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({
             "generated": NOW,
             "min_discount": min_off,
-            "elsewhere": elsewhere,
             "rates": {c: rates[c] for c in sorted({i["cur"] for i in items.values()}) if c in rates},
             "status": status,
             "items": sorted(items.values(), key=lambda i: (-i["off"], i["store"], i["title"])),

@@ -64,11 +64,6 @@
   #brandbox { margin: 0 0 12px; align-items: center; }
   #brandbox[hidden] { display: none; }
   #brandbox input { width: 190px; }
-  .picker .panel a { display: block; padding: 3px 2px; color: var(--accent); text-decoration: none; white-space: nowrap; }
-  .picker .panel a:hover { text-decoration: underline; }
-  .picker .panel div.head { font-weight: 600; margin-top: 8px; padding: 3px 2px; }
-  .picker .panel div.head:first-child { margin-top: 0; }
-  .picker .panel p { margin: 0 2px 6px; color: var(--muted); font-size: 12px; white-space: normal; min-width: 220px; }
   main { padding: 12px 14px 40px; }
   #count { color: var(--muted); margin: 0 0 10px; }
   #count button { border: 0; background: none; padding: 0; color: var(--accent); text-decoration: underline; }
@@ -899,38 +894,13 @@ function brandIndex() {
   });
 }
 function addBrand(key, name) { prefs.brands[key] = name; savePrefs(); loadBrands(); render(); }
-// "Search other stores": for stores this site cannot read, a link that opens the store's own search for a brand
-// (DATA.elsewhere, from "search" in stores.json), or the front page of the brand's own shop. Nothing is fetched.
-function searchWords(brand) {                                // "Mavi jeans" when one type or kind is ticked
-  const names = pickedNames(), one = names.length === 1 && !/^(Other|Clothing)/.test(names[0]) ? names[0] : "";
-  return brand + (one ? " " + one.split(/,| and /)[0].toLowerCase() : "");
-}
-function elsewhereRows(queries) {
-  const viaGoogle = s => s.search.includes("google.com/search?q=site");   // no search address known: the store's pages on Google
-  const shops = (DATA.elsewhere || []).filter(s => s.search).sort((a, b) => viaGoogle(a) - viaGoogle(b) || a.name.localeCompare(b.name));
-  const link = (name, url) => { const a = el("a", null, name); a.href = url; a.target = "_blank"; a.rel = "noopener noreferrer"; return a; };
-  return queries.flatMap(brand => {
-    const words = searchWords(brand), q = encodeURIComponent(words), key = brandKey(brand);
-    const own = (DATA.elsewhere || []).filter(s => s.home && brandKey(s.name) === key).map(s => link(s.name + ": its own store", s.home));
-    return [el("div", "head", words), ...own, ...shops.map(s => link(s.name + (viaGoogle(s) ? " (via Google)" : ""), s.search.replace("{q}", q))),
-            link("Google Shopping", "https://www.google.com/search?udm=28&q=" + q)];
-  });
-}
 function showBrandBox() {
   const box = $("brandbox");
   box.hidden = tab !== "brands";
   if (box.hidden || box.contains(document.activeElement)) return;   // don't redraw under someone typing
-  const input = el("input"), found = el("span", "chips"), other = el("details", "picker"), panel = el("div", "panel");
-  // the stores searched from here: for what is being typed, then for each brand looked up
-  const fillOther = () => {
-    const typed = input.value.trim(), queries = [...new Set([typed, ...Object.values(prefs.brands).sort((a, b) => a.localeCompare(b))].filter(Boolean))];
-    other.hidden = !queries.length || !(DATA.elsewhere || []).length;
-    panel.replaceChildren(el("p", null, "Stores this site cannot read. Each link opens a search of that store."), ...elsewhereRows(queries));
-  };
-  other.append(el("summary", null, "Search other stores"), panel);
+  const input = el("input"), found = el("span", "chips");
   input.type = "search"; input.placeholder = "Look up a brand"; input.setAttribute("aria-label", "Look up a brand");
   input.oninput = () => brandIndex().then(index => {
-    fillOther();
     const q = brandKey(input.value);
     const hits = !q ? [] : index.filter(b => b.key.includes(q) && !(b.key in prefs.brands))
       .sort((a, b) => b.key.startsWith(q) - a.key.startsWith(q) || b.n - a.n).slice(0, 8);
@@ -939,15 +909,14 @@ function showBrandBox() {
       pick.onclick = () => { input.blur(); addBrand(b.key, b.name); };
       return pick;
     }));
-    if (q && !hits.length) found.append(el("span", "meta", "No brand by that name in the stores tracked. Try “Search other stores”."));
+    if (q && !hits.length) found.append(el("span", "meta", "No brand by that name in the stores tracked."));
   });
   const mine = Object.entries(prefs.brands).sort((a, b) => a[1].localeCompare(b[1])).map(([key, name]) => {
     const b = el("button", null, name + " ✕"); b.title = "Stop showing " + name; b.setAttribute("aria-pressed", true);
     b.onclick = () => { delete prefs.brands[key]; savePrefs(); buildCats(); render(); };
     return b;
   });
-  fillOther();
-  box.replaceChildren(...mine, input, found, other);
+  box.replaceChildren(...mine, input, found);
 }
 
 // ---- settings panel
@@ -1036,7 +1005,7 @@ function setup() {
     $("tabs").append(btn);
   }
   buildCats();
-  document.addEventListener("click", e => { for (const p of document.querySelectorAll(".picker[open]")) if (!p.contains(e.target)) p.open = false; });
+  document.addEventListener("click", e => { if ($("cats").open && !$("cats").contains(e.target)) $("cats").open = false; });
   const stores = [...new Map(DATA.items.map(i => [i.store, i.store_name])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
   $("store").append(new Option("All stores", ""), ...stores.map(([h, n]) => new Option(n, h)));
   fillCatMenus();
