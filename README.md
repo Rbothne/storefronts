@@ -51,3 +51,20 @@ Run locally:
     py -m http.server 8000 -d docs     # then open http://localhost:8000
 
 Settings in `stores.json`: `min_discount` (percent off needed to be listed), `max_pages` (250 products per page, per store), `max_items_per_store` (optional cap, keeps each store's deepest discounts; unset means no cap), `workers` (stores fetched at the same time), `delay_seconds` (pause between requests to one store).
+
+## Where the data comes from
+
+Few of these are official APIs: most are the data a store's own pages already load, read at the pace and within the limits described above.
+
+| Source | Used for |
+|---|---|
+| Shopify `products.json` feed | Products, prices, sizes and stock for Shopify stores |
+| Stores' own category pages | The same for other stores, read from the product data embedded in the page |
+| WooCommerce Store API | Products and prices for WooCommerce shops |
+| NetSuite items API | Products and prices for NetSuite shops |
+| Algolia search index | Stores that refuse plain requests but build their pages from a search index (Yoox) |
+| Browser harvest (a real Chromium, `tools/harvest.py`) | Stores that turn away everything except a real browser |
+| Each site's `robots.txt` | Deciding which addresses the build may read |
+| open.er-api.com | Exchange rates, to show every price in US dollars |
+| Anthropic API (your own key) | The "Ask the assistant" chat on the page |
+| GitHub Actions and GitHub Pages | Running the scheduled build and hosting the site |
