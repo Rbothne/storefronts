@@ -7,21 +7,25 @@ Writes  docs/data.json     (what the page shows)
         data/state/        (one file per store: price, discount and stock changes of every product; see history.py)
         docs/metrics.json  (indicators for the metrics page, worked out from data/state/)
 
+Shopify stores are read here; stores that are not open Shopify feeds are read by listings.py.
 Standard library only.  Run:  python3 build.py
 """
 import concurrent.futures
 import datetime
+import gzip
 import html as htmllib
 import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 from urllib.parse import unquote, urlparse
 
 import history
+import listings
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -32,6 +36,7 @@ COME_BACK_FOR = 600   # ... and waits on refusals for this long at most; after t
 PATIENT = False       # True during the come-back pass: wait and retry on 429 instead of moving on
 PATIENT_UNTIL = 0     # when that patience runs out (a time.time() value)
 COUNT = {"requests": 0, "refused": 0}   # this run's requests, and how many were answered 429 (too many requests)
+LANE = threading.local()  # per store being read: .delay, a longer pause it asks for (Crawl-delay); .gzip (see get)
 
 
 # ---------------------------------------------------------------- fetching
@@ -47,14 +52,21 @@ def get(url, timeout=25, tries=3):
     """
     for attempt in range(tries):
         COUNT["requests"] += 1
-        req = urllib.request.Request(url, headers={
-            "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "application/json,text/html;q=0.9,*/*;q=0.8"})
+        headers = {"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9",
+                   "Accept": "application/json,text/html;q=0.9,*/*;q=0.8"}
+        if getattr(LANE, "gzip", False):
+            # Listing pages run to 1-4 MB of HTML; compressed they are a fifth of that. Asked for only there:
+            # some servers stall on it (Visvim's NetSuite API never answers a request that offers gzip).
+            headers["Accept-Encoding"] = "gzip"
+        req = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 # generous cap: one 250-product feed page can run to 16 MB (All Volleyball)
-                body = r.read(40_000_000).decode("utf-8", "replace")
-                time.sleep(DELAY)
+                raw = r.read(40_000_000)
+                if r.headers.get("Content-Encoding", "").lower() == "gzip":
+                    raw = gzip.decompress(raw)
+                body = raw.decode(charset(r.headers.get("Content-Type", ""), raw), "replace")
+                time.sleep(getattr(LANE, "delay", None) or DELAY)
                 return r.status, body
         except urllib.error.HTTPError as e:
             status = e.code
@@ -68,7 +80,7 @@ def get(url, timeout=25, tries=3):
                     pass
                 time.sleep(wait)
                 continue
-            time.sleep(DELAY)
+            time.sleep(getattr(LANE, "delay", None) or DELAY)
             return status, ""
         except Exception as e:  # DNS, TLS, timeout
             if attempt + 1 < tries:
@@ -76,6 +88,20 @@ def get(url, timeout=25, tries=3):
                 continue
             return 0, str(e)
     return 0, ""
+
+
+def charset(content_type, raw):
+    """The text encoding of a response: its Content-Type's, else the page's own <meta charset>, else UTF-8.
+    Japanese shops still serve Shift_JIS and EUC-JP."""
+    m = re.search(r"charset=[\"']?([\w-]+)", content_type, re.I) or \
+        re.search(rb"<meta[^>]+charset=[\"']?([\w-]+)", raw[:4000], re.I)
+    name = m.group(1) if m else "utf-8"
+    name = name.decode("ascii", "replace") if isinstance(name, bytes) else name
+    try:
+        "".encode(name)
+        return {"shift_jis": "cp932", "sjis": "cp932", "x-sjis": "cp932", "euc-jp": "euc_jis_2004"}.get(name.lower(), name)
+    except LookupError:
+        return "utf-8"
 
 
 class Gone(Exception):
@@ -331,6 +357,36 @@ def link_item(host, url, note=""):
     return {"id": url, "store": host, "title": title, "brand": "", "url": url, "img": "",
             "price": None, "was": None, "off": 0, "avail": None, "sizes": [],
             "tags": [], "link_only": True, "note": note}
+
+
+def listing_item(host, store, d):
+    """Normalise one product read by listings.py (a store's listing pages or shop API) to what shopify_item gives.
+    Its id is its address without the query, which listings add and drop (?source=plp, colour choices)."""
+    price, was, url = d.get("price"), d.get("was"), d.get("url") or ""
+    if not price or not url.startswith("http"):
+        return None
+    off = round((was - price) / was * 100) if was and was > price else 0
+    sizes = [s for s in d.get("sizes") or [] if s]
+    return {
+        "g": gender(" ".join([d["title"], d.get("brand") or "", urlparse(url).path.replace("-", " ")]),
+                    d.get("ptype") or ""),
+        "id": listings.canon(url),
+        "store": host,
+        "title": d["title"],
+        "brand": d.get("brand") or "",
+        "url": url,
+        "img": d.get("img") or "",
+        "price": round(price, 2),
+        "was": round(was, 2) if off else None,
+        "off": off,
+        "avail": d.get("avail"),         # None when the listing does not say
+        "sizes": sizes[:14],
+        "sizes_all": sizes,
+        "tags": [],
+        "ptype": d.get("ptype") or "",
+        "published": "",
+        "cur": d.get("cur") or store.get("currency", "USD"),
+    }
 
 
 # ---------------------------------------------------------------- categories
@@ -755,7 +811,30 @@ def main():
         # "feed": a shop whose own address is a custom front end still serves its Shopify data from another
         # host (often <name>.myshopify.com). Items keep the shop's address; only the reading goes there.
         feed = store.get("feed", host)
+        LANE.delay = store.get("delay_seconds")      # a store whose robots.txt asks for a longer Crawl-delay
+        LANE.gzip = store.get("read") == "listing"
         print(f"{host} ...", flush=True)
+
+        def take(it, full, handle=None):
+            """One product of the store's catalogue: track it, and list it if it is on sale (or "all")."""
+            it["group"], it["kind"], it["type"] = group_kind(
+                store, it["ptype"], it["title"], store.get("brand") or it["brand"])
+            readings[it["id"]] = {"price": it["price"], "off": it["off"], "avail": it["avail"],
+                                  "brand": store.get("brand") or it["brand"],
+                                  "kind": it["kind"] or it["group"], "published": it["published"]}
+            # A quiet price cut: the store shows no "was" price, but the price is well under
+            # the highest one tracked here.
+            high = max((pt[1] for pt in known.get(it["id"], {}).get("h", [])), default=0)
+            if high and it["off"] < min_off and it["price"] <= high * (1 - min_off / 100):
+                it["was"], it["tracked_drop"] = high, True
+                it["off"] = round((high - it["price"]) / high * 100)
+            if handle in wanted:
+                found.append((it, "wish"))
+                wanted.discard(handle)
+            # a listing that cannot tell (avail None) shows what the shop offers for sale
+            if it["avail"] is not False:
+                (listed if it["off"] >= min_off or full else rest).append(it)
+
         try:
             if store["platform"] == "shopify":
                 if store.get("browse") or wanted:
@@ -781,27 +860,9 @@ def main():
                                 if not it or p.get("handle") in seen:
                                     continue
                                 seen.add(p.get("handle"))
-                                it["group"], it["kind"], it["type"] = group_kind(
-                                    store, it["ptype"], it["title"], store.get("brand") or it["brand"])
-                                readings[it["id"]] = {"price": it["price"], "off": it["off"], "avail": it["avail"],
-                                                      "brand": store.get("brand") or it["brand"],
-                                                      "kind": it["kind"] or it["group"], "published": it["published"]}
-                                # A quiet price cut: the store shows no "was" price, but the price is well under
-                                # the highest one tracked here.
-                                high = max((pt[1] for pt in known.get(it["id"], {}).get("h", [])), default=0)
-                                if high and it["off"] < min_off and it["price"] <= high * (1 - min_off / 100):
-                                    it["was"], it["tracked_drop"] = high, True
-                                    it["off"] = round((high - it["price"]) / high * 100)
-                                if p.get("handle") in wanted:
-                                    found.append((it, "wish"))
-                                    wanted.discard(p.get("handle"))
-                                if it["avail"]:
-                                    (listed if it["off"] >= min_off or full else rest).append(it)
+                                take(it, full, p.get("handle"))
                         except Exception as e:
                             errors.append(f"catalog{path}: {e}")
-                    # A few stores would swamp the rest, so keep each store's deepest discounts.
-                    listed.sort(key=lambda it: -it["off"])
-                    found += [(it, "sale" if it["off"] >= min_off else "full") for it in listed[:max_items]]
                 for handle in sorted(wanted):
                     url = f"https://{host}/products/{handle}"
                     try:
@@ -811,6 +872,18 @@ def main():
                     except Exception as e:
                         errors.append(f"{handle}: {e}")
                         found.append((link_item(host, url, "could not read price"), "wish"))
+            elif store.get("browse") and store.get("read"):
+                # Not an open Shopify feed: the store's listing pages or shop API, read by listings.py.
+                # "whole": true says the listed pages cover the store's whole range.
+                run = {"errors": errors, "cut": False}
+                for d in listings.read(host, store, get, store.get("max_pages", max_pages), run):
+                    it = listing_item(host, store, d)
+                    if it and it["id"] not in readings:
+                        take(it, store.get("all") is True)
+                whole = bool(store.get("whole")) and not run["cut"]
+            # A few stores would swamp the rest, so keep each store's deepest discounts.
+            listed.sort(key=lambda it: -it["off"])
+            found += [(it, "sale" if it["off"] >= min_off else "full") for it in listed[:max_items]]
 
             for url in wish_pages.get(host, []):
                 if store["platform"] == "page":

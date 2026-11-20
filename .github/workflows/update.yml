@@ -16,7 +16,7 @@ on:
         default: full
   push:                         # a change to the page republishes it; a change to the stores or the build refreshes everything
     branches: [main]
-    paths: ["docs/**", "build.py", "history.py", "stores.json", ".github/workflows/update.yml"]
+    paths: ["docs/**", "build.py", "history.py", "listings.py", "stores.json", ".github/workflows/update.yml"]
 
 permissions:
   contents: write               # to replace the data branch
@@ -54,7 +54,7 @@ jobs:
                                                capture_output=True, text=True).stdout.split())
               except Exception:
                   changed = {"build.py"}             # can't tell: refresh everything to be safe
-              rebuild = {"build.py", "history.py", "stores.json", ".github/workflows/update.yml"}
+              rebuild = {"build.py", "history.py", "listings.py", "stores.json", ".github/workflows/update.yml"}
               mode = "full" if changed & rebuild else "publish"
           elif event == "schedule" and e.get("schedule") == "37 * * * *":
               mode = "cycle"
