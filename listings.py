@@ -459,6 +459,8 @@ def json_by_id(page):
                   "ptype": node.get("category") if isinstance(node.get("category"), str) else ""}
             for i in ids:
                 out.setdefault(i.lower(), it)
+            if it["title"]:
+                out.setdefault(slug(it["title"]), it)
     return out
 
 
@@ -470,6 +472,22 @@ def by_id(table, pid):
         return table[pid]
     keys = [k for k in table if pid.startswith(k) and len(k) > 3]
     return table[max(keys, key=len)] if keys else None
+
+
+def slug(name):
+    """A product's name as a listing writes it into an address: "Elisa Luxe Gold Short Pendant Necklace" ->
+    "elisa-luxe-gold-short-pendant-necklace"."""
+    return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", str(name or "").lower())).strip("-")
+
+
+def by_address(table, url):
+    """What `table` holds for the product at this address, matched on the part of the address that spells its
+    name or its id. For a grid that keeps the addresses in its links and the prices in its data."""
+    for part in reversed([p for p in urlparse(url).path.split("/") if p]):
+        key = slug(part.rsplit(".", 1)[0])
+        if key in table:
+            return table[key]
+    return None
 
 
 def deep_picture(v, depth=0):
@@ -806,23 +824,32 @@ def from_links(page, base, store):
             groups[-1]["parts"].append(m)
         else:
             groups.append({"url": url, "parts": [m]})
-    out, seen = [], set()
+    out, seen, table = [], set(), None
     for n, g in enumerate(groups):
         start = g["parts"][0].start()
         # up to the next product's first link (tiles can run to 40 KB of markup), or 20 KB after the last one
         end = groups[n + 1]["parts"][0].start() if n + 1 < len(groups) else g["parts"][-1].end() + 20000
         chunk = body[start:min(end, start + 80000)]
-        prices = price_text(chunk, store)
+        said = None
+        if store.get("link_ids"):
+            # a grid that keeps its addresses in its links and its prices in the page's own data, matched on the
+            # part of the address that spells the product's name or its id (Kendra Scott)
+            table = json_by_id(page) if table is None else table
+            said = by_address(table, g["url"])
+        prices = price_text(chunk, store) or ({"price": said["price"], "was": said["was"]} if said else None)
         if not prices or g["url"] in seen:
             continue
         seen.add(g["url"])
-        title = link_title(store, g["parts"], chunk)
+        # where the page's own data names the product, that name beats whatever the tile prints around the link
+        title = (said or {}).get("title", "") or link_title(store, g["parts"], chunk)
         img = first_image(chunk)
         sizes = html_sizes(store, chunk)
-        out.append({"title": title, "url": g["url"], "img": urljoin(base, img) if img else "", **prices, "cur": "",
+        out.append({"title": title, "url": g["url"], "img": urljoin(base, img) if img else "", **prices,
+                    "cur": (said or {}).get("cur", ""),
                     "avail": bool(sizes) if store.get("size_stock") and SIZE_ATTR.search(chunk)
                              else sold(store, chunk),
-                    "sizes": sizes, "brand": class_text(store, "brand_class", chunk), "ptype": ""})
+                    "sizes": sizes, "brand": class_text(store, "brand_class", chunk),
+                    "ptype": (said or {}).get("ptype", "")})
     return out
 
 
