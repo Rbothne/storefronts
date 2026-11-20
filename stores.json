@@ -299,6 +299,34 @@
     {"host": "www.asics.com", "name": "Asics", "platform": "link", "group": "clothing", "kind": "footwear"},
     {"host": "www.yoshidakaban.com", "name": "Yoshida & Co.", "platform": "link", "group": "clothing", "kind": "accessories"},
     {"host": "www.amazon.com", "name": "Amazon", "platform": "link", "group": "clothing"},
-    {"host": "www.nexusmods.com", "name": "Nexus Mods", "platform": "link", "group": "other"}
+    {"host": "www.nexusmods.com", "name": "Nexus Mods", "platform": "link", "group": "other"},
+
+    {"host": "bonobos.com", "name": "Bonobos", "platform": "shopify", "group": "clothing", "fits": "men", "brand": "Bonobos", "currency": "USD", "browse": true},
+    {"host": "www.clubmonaco.com", "name": "Club Monaco", "platform": "shopify", "group": "clothing", "brand": "Club Monaco", "currency": "USD", "browse": true},
+    {"host": "www.comfortoneshoes.com", "name": "Comfort One Shoes", "platform": "shopify", "group": "clothing", "kind": "footwear", "currency": "USD", "browse": true},
+    {"host": "www.aldoshoes.com", "name": "Aldo", "platform": "shopify", "group": "clothing", "brand": "Aldo", "currency": "USD", "browse": true},
+    {"host": "www.colehaan.com", "name": "Cole Haan", "platform": "shopify", "group": "clothing", "brand": "Cole Haan", "currency": "USD", "browse": true},
+    {"host": "edikted.com", "name": "Edikted", "platform": "shopify", "group": "clothing", "fits": "women", "brand": "Edikted", "currency": "USD", "browse": true},
+    {"host": "www.everlane.com", "name": "Everlane", "platform": "shopify", "group": "clothing", "brand": "Everlane", "currency": "USD", "browse": true},
+    {"host": "www.gorjana.com", "name": "gorjana", "platform": "shopify", "group": "clothing", "kind": "accessories", "fits": "women", "brand": "gorjana", "currency": "USD", "browse": true},
+    {"host": "kizik.com", "name": "Kizik", "platform": "shopify", "group": "clothing", "kind": "footwear", "brand": "Kizik", "currency": "USD", "browse": true},
+    {"host": "us.mavi.com", "name": "Mavi", "platform": "shopify", "group": "clothing", "brand": "Mavi", "currency": "USD", "browse": true},
+    {"host": "oakandfort.com", "name": "Oak + Fort", "platform": "shopify", "group": "clothing", "brand": "Oak + Fort", "currency": "USD", "browse": true},
+    {"host": "www.psychobunny.com", "name": "Psycho Bunny", "platform": "shopify", "group": "clothing", "brand": "Psycho Bunny", "currency": "USD", "browse": true},
+    {"host": "rothys.com", "name": "Rothy's", "platform": "shopify", "group": "clothing", "brand": "Rothy's", "currency": "USD", "browse": true},
+    {"host": "www.shinola.com", "name": "Shinola", "platform": "shopify", "group": "clothing", "kind": "accessories", "brand": "Shinola", "currency": "USD", "browse": true},
+    {"host": "www.thirdlove.com", "name": "ThirdLove", "platform": "shopify", "group": "clothing", "fits": "women", "brand": "ThirdLove", "currency": "USD", "browse": true},
+    {"host": "studs.com", "name": "Studs", "platform": "shopify", "group": "clothing", "kind": "accessories", "brand": "Studs", "currency": "USD", "browse": true},
+    {"host": "www.lovisa.com", "name": "Lovisa", "platform": "shopify", "group": "clothing", "kind": "accessories", "fits": "women", "brand": "Lovisa", "currency": "USD", "browse": true},
+    {"host": "www.travismathew.com", "name": "TravisMathew", "platform": "shopify", "group": "clothing", "fits": "men", "brand": "TravisMathew", "currency": "USD", "browse": true},
+    {"host": "www.untuckit.com", "name": "UNTUCKit", "platform": "shopify", "group": "clothing", "brand": "UNTUCKit", "currency": "USD", "browse": true},
+    {"host": "www.windsorstore.com", "name": "Windsor", "platform": "shopify", "group": "clothing", "fits": "women", "brand": "Windsor", "currency": "USD", "browse": true},
+
+    {"host": "www.nordstrom.com", "name": "Nordstrom", "platform": "link", "group": "clothing"},
+    {"host": "www.bally.com", "name": "Bally", "platform": "link", "group": "clothing"},
+    {"host": "www.macys.com", "name": "Macy's", "platform": "link", "group": "clothing"},
+    {"host": "www.bloomingdales.com", "name": "Bloomingdale's", "platform": "link", "group": "clothing"},
+    {"host": "www.saksfifthavenue.com", "name": "Saks Fifth Avenue", "platform": "link", "group": "clothing"},
+    {"host": "www.neimanmarcus.com", "name": "Neiman Marcus", "platform": "link", "group": "clothing"}
   ]
 }

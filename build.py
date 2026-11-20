@@ -377,6 +377,76 @@ def categorize(*texts):
     return None
 
 
+# Within a kind, the finer type of a clothing item ("jeans" among bottoms). Matched against the product type and
+# the title together; first match wins, so order matters: "Denim Shorts" are shorts, "Crew Neck Tee" is a
+# T-shirt, a "Sport Coat" is a blazer. Anything unmatched has no type (the page lists it as "Other").
+TYPES = {kind: [(re.compile(r"\b(%s)\b" % rx, re.I), name) for name, rx in rules] for kind, rules in {
+    "tops": [
+        ("tanks", r"tanks?|singlets?|camisoles?|(sports )?bras?|bralettes?|bodysuits?"),
+        ("tshirts", r"t-?shirts?|tees?|(?<!['’])t"),
+        ("polos", r"polos?|rugby"),
+        ("knitwear", r"sweaters?|knit(s|wear|ted)?|cardigans?|jumpers?|turtlenecks?|magli(a|e|one|oni|eria)|girocollo"),
+        ("sweatshirts", r"hood(s|y|ie|ies)?|hooded|sweatshirts?|sweats?|crew ?necks?|pullovers?"
+                        r"|(half|quarter|1/4|1/2)[- ]zips?|fleece|felp[ae]"),
+        ("shirts", r"\w*shirts?|shirting|button[- ]downs?|blouses?|blus[ae]|camici[ae]"),
+    ],
+    "bottoms": [
+        ("shorts", r"\w*shorts?|bermudas?"),
+        ("skirts", r"skirts?|skorts?|gonn[ae]"),
+        ("jeans", r"jeans?|denim|selvedge|selvage|boot ?cut|\d+(\.\d+)? ?oz"),
+        ("sweatpants", r"sweatpants?|joggers?|track ?pants?|sweats"),
+        ("leggings", r"leggings?|tights"),
+        ("underwear", r"boxers?|briefs?|underwear|trunks"),
+        ("trousers", r"pants?|trousers?|chinos?|slacks|cargos?|pantalon[ei]|fatigues?"),
+    ],
+    "outerwear": [
+        ("blazers", r"blazers?|sport ?coats?|suit jackets?"),
+        ("vests", r"vests?|gilets?|waistcoats?"),
+        ("coats", r"\w*coats?|parkas?|trench|cappott[oi]|ponchos?"),
+        ("jackets", r"jackets?|jkt|bombers?|blousons?|anoraks?|windbreakers?|puffers?|shell|overshirts?|outershirts?"
+                    r"|giacc(a|he)|giubb(ino|ini|otto|otti)|piumin[oi]"),
+    ],
+    "dresses": [
+        ("jumpsuits", r"jumpsuits?|rompers?|playsuits?|unitards?|onesies?|overalls?"),
+        ("dresses", r"dress(es)?|gowns?|abit[oi]|vestit[oi]"),
+    ],
+    "footwear": [
+        ("boots", r"boots?|stival(i|etti)"),
+        ("sandals", r"sandals?|slides?|flip[- ]flops?|sandali|espadrilles?"),
+        ("loafers", r"loafers?|derb(y|ies)|oxfords?|brogues?|mocassini|moccasins?|monk ?straps?|dress shoes?"),
+        ("heels", r"heels?|pumps|flats?|ballerin[ae]|d[eé]collet[eé]s?|slingbacks?"),
+        ("slippers", r"slippers?|clogs?|mules?"),
+        ("sneakers", r"sneakers?|trainers?|runners?|running|(low|mid|high)[- ]tops?"),
+    ],
+    "accessories": [
+        ("bags", r"bags?|totes?|backpacks?|pouch(es)?|clutch(es)?|duffe?ls?|bors[ae]"),
+        ("hats", r"hats?|caps?|beanies?|berets?|balaclavas?|headwear|cappell[oi]"),
+        ("socks", r"socks?|calz(e|ini)"),
+        ("scarves", r"scar(f|ves)|gloves?|mitt(s|ens)?|bandanas?|sciarp[ae]|guanti"),
+        ("eyewear", r"sunglasses|eyewear|glasses|occhiali"),
+        ("jewelry", r"jewel(le)?ry|necklaces?|bracelets?|rings?|earrings?|pendants?|collan[ae]|braccial[ei]|anell[oi]"
+                    r"|orecchini|gioielli"),
+        ("belts", r"belts?|cintur[ae]"),
+        ("wallets", r"wallets?|card ?holders?|portafogli[o]?"),
+        ("watches", r"watch(es)?"),
+    ],
+}.items()}
+# Shoes that say neither "sneaker" nor anything else ("Dunk Low", "1954R") from the makers of sneakers.
+SNEAKER_MAKERS = re.compile(r"\b(nike|jordan|adidas|new balance|asics|converse|vans|salomon|hoka|saucony|puma|reebok"
+                            r"|mizuno|norda|karhu|diadora|veja|autry)\b", re.I)
+
+
+def item_type(kind, ptype, title, brand=""):
+    """The finer type of a clothing item within its kind ("jeans"), or None."""
+    text = f"{ptype} {title}"
+    for rx, name in TYPES.get(kind, ()):
+        if rx.search(text):
+            return name
+    if kind == "footwear" and SNEAKER_MAKERS.search(f"{brand} {title}"):
+        return "sneakers"
+    return None
+
+
 # ---------------------------------------------------------------- sizes
 
 # Stores write the same size many ways ("LG", "Large", "50 (Large)", "3").
@@ -511,8 +581,9 @@ def size_tokens(kind, live, every):
     return sorted(out, key=lambda t: (LETTERS.index(t) if t in LETTERS else 99, t))
 
 
-def group_kind(store, ptype, title):
-    """(group, kind) for an item: the store's group by default, sorted per item for clothing and mixed stores."""
+def group_kind(store, ptype, title, brand=""):
+    """(group, kind, type) for an item: the store's group by default, sorted per item for clothing and mixed
+    stores; clothing also gets its type within the kind where the listing says ("jeans" among bottoms)."""
     group, kind = store.get("group", "other"), None
     # Clothing stores, and others marked "mixed", get sorted per item.
     # Pure kitchen / stationery shops don't: "Pen Cap" is not a hat.
@@ -520,7 +591,8 @@ def group_kind(store, ptype, title):
         group, _, kind = (categorize(ptype, title) or group).partition("/")
         if group == "clothing":
             kind = kind or store.get("kind", "other")
-    return group, kind or None
+            return group, kind, item_type(kind, ptype, title, brand)
+    return group, kind or None, None
 
 
 # ---------------------------------------------------------------- currency
@@ -589,16 +661,22 @@ def write_catalog(catalog, stores):
 
 
 def write_brand_files():
-    """Regroup every store's catalogue by brand into docs/brands/."""
-    files = [[] for _ in range(BRAND_FILES)]
+    """Regroup every store's catalogue by brand into docs/brands/, with an index of the brands for the page's
+    brand lookup: index.json lists [name, items] for each brand, biggest first, under its most common spelling."""
+    files, names = [[] for _ in range(BRAND_FILES)], {}
     for file in sorted(os.listdir(CATALOG_DIR)) if os.path.isdir(CATALOG_DIR) else []:
         for it in load_json(os.path.join(CATALOG_DIR, file), []):
-            key = brand_key(it.get("brand") or it["store_name"])
+            name = (it.get("brand") or it["store_name"]).strip()
+            key = brand_key(name)
             if key:
                 files[brand_file(key)].append(it)
+                spellings = names.setdefault(key, {})
+                spellings[name] = spellings.get(name, 0) + 1
     os.makedirs(BRANDS_DIR, exist_ok=True)
     for n, found in enumerate(files):
         write_lines(os.path.join(BRANDS_DIR, f"{n}.json"), found)
+    index = [[max(sp, key=sp.get), sum(sp.values())] for sp in names.values()]
+    write_lines(os.path.join(BRANDS_DIR, "index.json"), sorted(index, key=lambda row: (-row[1], row[0].lower())))
 
 
 # ---------------------------------------------------------------- main
@@ -699,7 +777,8 @@ def main():
                                 if not it or p.get("handle") in seen:
                                     continue
                                 seen.add(p.get("handle"))
-                                it["group"], it["kind"] = group_kind(store, it["ptype"], it["title"])
+                                it["group"], it["kind"], it["type"] = group_kind(
+                                    store, it["ptype"], it["title"], store.get("brand") or it["brand"])
                                 readings[it["id"]] = {"price": it["price"], "off": it["off"], "avail": it["avail"],
                                                       "brand": store.get("brand") or it["brand"],
                                                       "kind": it["kind"] or it["group"], "published": it["published"]}
@@ -828,12 +907,14 @@ def main():
         old = it.get("stale") or it.pop("carried", False)   # reused from the last run: keep what it had
         it.pop("published", None)
         if not old and "kind" not in it:         # items from a store's feed were sorted as they were read
-            it["group"], it["kind"] = group_kind(s, ptype, it["title"])
+            it["group"], it["kind"], it["type"] = group_kind(s, ptype, it["title"], it.get("brand") or "")
         it["cur"] = it.get("cur") or s.get("currency", "USD")
         if not it.get("g") and s.get("fits"):    # a women's or men's boutique: unlabelled items are that
             it["g"] = {"women": "w", "men": "m"}[s["fits"]]
         if not it.get("g"):
             it.pop("g", None)
+        if not it.get("type"):
+            it.pop("type", None)
         every =it.pop("sizes_all", None) or it["sizes"]
         if not old:
             sz = size_tokens(it["kind"], it["sizes"], every) if it["kind"] in SIZED else []

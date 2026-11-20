@@ -46,7 +46,7 @@ const TOOLS = [
       type: "object",
       properties: {
         query: { type: "string", description: "Words that must all appear in the item's title, brand, store or category, for example \"needles track pant\". Leave out to browse by the other filters." },
-        category: { type: "string", description: "A site category: clothing, clothing/tops, clothing/bottoms, clothing/outerwear, clothing/dresses, clothing/footwear, clothing/accessories, coffee, tea, home, music, skate, sports or gear." },
+        category: { type: "string", description: "A site category: clothing, clothing/tops, clothing/bottoms, clothing/outerwear, clothing/dresses, clothing/footwear, clothing/accessories, coffee, tea, home, music, skate, sports or gear. A clothing kind can be narrowed to one type, for example clothing/bottoms/jeans: tops are tshirts, shirts, polos, sweatshirts, knitwear or tanks; bottoms are jeans, trousers, shorts, sweatpants, leggings, skirts or underwear; outerwear is jackets, coats, blazers or vests; footwear is sneakers, boots, loafers, sandals, heels or slippers; accessories are bags, hats, jewelry, eyewear, belts, wallets, watches, socks or scarves. Not every item has a type." },
         store: { type: "string", description: "Part of a store name, for example \"today clothing\"." },
         brand: { type: "string", description: "Part of a brand name, for example \"auralee\"." },
         max_price_usd: { type: "number", description: "Highest price in US dollars." },
@@ -105,7 +105,7 @@ function validInput(tool, input) {
 // ---- what the tools do
 function brief(i) {
   const o = { id: i.id, title: i.title, brand: i.brand || undefined, store: i.store_name,
-              category: i.group + (i.kind ? "/" + i.kind : ""), price: i.price, currency: i.cur };
+              category: i.group + (i.kind ? "/" + i.kind : "") + (i.type ? "/" + i.type : ""), price: i.price, currency: i.cur };
   if (i.cur !== "USD" && i.usd != null) o.usd = i.usd;
   if (i.off) {
     o.was = i.was; o.percent_off = i.off;
@@ -135,9 +135,9 @@ function searchItems(a) {
   const gen = { men: "m", women: "w", kids: "k" }[a.fits] || "", brands = followedBrands(pool());
   let list = [...DATA.items, ...extras()].filter(i => {
     if (ruledOut(i) || crowdedOut(i)) return false;
-    const text = (i.title + " " + (i.brand || "") + " " + i.store_name + " " + i.group + " " + (i.kind || "")).toLowerCase();
+    const text = (i.title + " " + (i.brand || "") + " " + i.store_name + " " + i.group + " " + (i.kind || "") + " " + (i.type || "")).toLowerCase();
     return words.every(w => text.includes(w)) &&
-      (!a.category || i.group === a.category || i.group + "/" + i.kind === a.category) &&
+      (!a.category || [i.group, i.group + "/" + i.kind, i.group + "/" + i.kind + "/" + i.type].includes(a.category)) &&
       has(i.store_name, a.store) && has(i.brand, a.brand) &&
       (a.max_price_usd == null || (i.usd ?? i.price ?? Infinity) <= a.max_price_usd) &&
       (i.off || 0) >= (a.min_discount || 0) && (!a.in_my_sizes || sizeOK(i)) && fitsShown(i, gen);
@@ -178,7 +178,8 @@ function viewText() {
   const tabName = { wish: "Followed", brands: "From my brands", all: "Everything" }[tab];
   const bits = ["tab: " + tabName];
   if ($("q").value.trim()) bits.push("search: \"" + $("q").value.trim() + "\"");
-  for (const [id, name] of [["group", "category"], ["store", "store"], ["itemcat", "my item category"], ["storecat", "my store category"],
+  if (picked.size) bits.push("category: " + pickedNames().join(", "));
+  for (const [id, name] of [["store", "store"], ["itemcat", "my item category"], ["storecat", "my store category"],
                             ["gender", "showing"], ["minoff", "discount"]]) { const v = pick(id); if (v && $(id).value !== "0") bits.push(name + ": " + v); }
   bits.push("sort: " + $("sort").selectedOptions[0].text + " (" + $("dir").textContent.replace(/^[↑↓] /, "") + ")");
   if ($("mysizes").checked) bits.push("only items in my sizes");

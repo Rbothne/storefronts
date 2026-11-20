@@ -38,6 +38,32 @@
   .filters input[type=search] { flex: 1 1 140px; }
   .filters label { display: flex; align-items: center; gap: 4px; color: var(--muted); white-space: nowrap; }
   .filters .pill { padding: 5px 12px; }
+  /* the category picker: a drop-down of tick boxes; a kind's types show once its arrow is clicked */
+  .picker { position: relative; }
+  .picker summary { list-style: none; cursor: pointer; border: 1px solid var(--line); background: var(--card);
+                    border-radius: 8px; padding: 6px 8px; color: var(--muted); white-space: nowrap; }
+  .picker summary::-webkit-details-marker { display: none; }
+  .picker summary span { color: var(--ink); }
+  .picker summary::after { content: " ▾"; }
+  .picker .panel { position: absolute; z-index: 8; top: calc(100% + 4px); left: 0; min-width: 240px; max-width: calc(100vw - 28px);
+                   max-height: 60vh; overflow-y: auto; background: var(--card); border: 1px solid var(--line);
+                   border-radius: 10px; padding: 8px 10px; box-shadow: 0 8px 24px rgb(0 0 0 / 25%); }
+  .picker .panel label { display: flex; gap: 7px; align-items: center; padding: 3px 2px; color: var(--ink); white-space: nowrap; flex: 1; }
+  .picker .panel label.head { font-weight: 600; margin-top: 6px; }
+  .picker .panel label.head:first-child { margin-top: 0; }
+  .picker .line { display: flex; align-items: center; }
+  .picker .twist { border: 0; background: none; width: 22px; padding: 2px 0; color: var(--muted); flex: none; font-size: 17px; line-height: 1; }
+  .picker .twist:disabled { cursor: default; }
+  .picker .panel label.sub { padding-left: 44px; }
+  @media (max-width: 700px) {                                   /* phones: the panel opens in place, full width */
+    .picker[open] { flex: 1 1 100%; }
+    .picker .panel { position: static; margin-top: 4px; max-height: none; max-width: none; box-shadow: none; }
+    .picker .panel label { padding: 6px 2px; }
+  }
+  /* brand lookup, on the "From my brands" tab */
+  #brandbox { margin: 0 0 12px; align-items: center; }
+  #brandbox[hidden] { display: none; }
+  #brandbox input { width: 190px; }
   main { padding: 12px 14px 40px; }
   #count { color: var(--muted); margin: 0 0 10px; }
   #count button { border: 0; background: none; padding: 0; color: var(--accent); text-decoration: underline; }
@@ -150,7 +176,10 @@
   <div class="filters">
     <input type="search" id="q" placeholder="Search title, brand, store" aria-label="Search">
     <button class="pill" id="filtersbtn" aria-expanded="false">Filters</button>
-    <select id="group" aria-label="Category"></select>
+    <details class="picker" id="cats">
+      <summary>Category: <span id="catslabel">Any</span></summary>
+      <div class="panel" id="catspanel"></div>
+    </details>
     <select id="store" aria-label="Store"></select>
     <select id="itemcat" aria-label="My item categories"></select>
     <select id="storecat" aria-label="My store categories"></select>
@@ -179,6 +208,7 @@
 <main>
   <p id="count"></p>
   <div id="changes" hidden></div>
+  <div id="brandbox" class="chips" hidden></div>
   <div class="grid" id="grid"></div>
   <button id="more" hidden>Show more</button>
 </main>
@@ -274,6 +304,7 @@ let DATA = { items: [], status: [] }, IDS = new Set(), tab = "wish", shown = PAG
 //   itemCats   your categories per item id; kept holds the copy of each categorised item
 //   storeCats  your categories per store host
 //   hidden     stores you hid;  muted  brands you hid
+//   brands     brands you looked up on the "From my brands" tab (key -> name), beside those of followed items
 //   notes      preferences the shopping assistant saved (the API key is stored separately, never in here)
 //   calm       true to hide high-volume stores (see crowd() below)
 let prefs;
@@ -284,7 +315,7 @@ function loadPrefs(text) {
   const p = JSON.parse(text);
   prefs = { follows: p.follows || {}, itemCats: p.itemCats || {}, kept: p.kept || {}, storeCats: p.storeCats || {},
             hidden: p.hidden || {}, muted: p.muted || {}, gender: p.gender || "", notes: p.notes || [], calm: !!p.calm,
-            changes: p.changes || [],
+            changes: p.changes || [], brands: p.brands || {},
             sizes: { tops: [], bottoms: [], shoes: [], ...(p.sizes || {}) } };
 }
 function savePrefs() { try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch (e) {} }
@@ -313,7 +344,7 @@ const brandOf = i => brandKey(i.brand || i.store_name);     // brand-run stores 
 // and a followed item keeps its current price after its sale ends. bucket() must match brand_file() in build.py.
 const BRAND_FILES = 512, LOADED = new Map(), ARRIVED = new Set();   // file number -> its items; the files that came back
 const bucket = key => { let n = 0; for (const c of key) n = (n * 31 + c.charCodeAt(0)) % BRAND_FILES; return n; };
-const myBrandKeys = () => new Set(Object.values(prefs.follows).map(brandOf).filter(Boolean));
+const myBrandKeys = () => new Set([...Object.values(prefs.follows).map(brandOf).filter(Boolean), ...Object.keys(prefs.brands)]);
 function extras() {
   const mine = myBrandKeys(), out = [];
   for (const list of LOADED.values()) for (const i of list) if (mine.has(brandOf(i)) && !IDS.has(i.id)) out.push(i);
@@ -333,7 +364,7 @@ function loadBrands() {
   Promise.all(need.map(n => fetch("brands/" + n + ".json", { cache: "no-cache" })
     .then(r => r.ok ? r.json() : null).catch(() => null)
     .then(list => { if (list) { LOADED.set(n, list.map(fill)); ARRIVED.add(n); } })))
-    .then(() => { refreshCopies(); render(); });
+    .then(() => { refreshCopies(); buildCats(); render(); });
 }
 const copyOf = ({ tags, gone, extra, ...copy }) => copy;      // what is kept of a starred or categorised item
 // Starred and categorised items keep a copy so they still show after they stop being listed. While an item is
@@ -392,7 +423,7 @@ function toggleCat(map, key, name) {
   next.length ? map[key] = next : delete map[key];
 }
 function followedBrands(items) {
-  const m = new Map();
+  const m = new Map(Object.entries(prefs.brands));
   for (const i of items) {
     if (isFollowed(i) && brandOf(i)) m.set(brandOf(i), i.brand || i.store_name);
   }
@@ -516,7 +547,7 @@ function sizeOK(i) {
 }
 
 function filtered(items, brands) {
-  const q = $("q").value.trim().toLowerCase(), g = $("group").value, s = $("store").value;
+  const q = $("q").value.trim().toLowerCase(), s = $("store").value;
   // Everything listed is in stock, so "In stock" only means something on the Followed tab
   const min = +$("minoff").value, stock = tab === "wish" && $("stock").checked, mine = $("mysizes").checked, gen = $("gender").value;
   const cat = $("itemcat").value.slice(2);
@@ -525,7 +556,7 @@ function filtered(items, brands) {
     inTab(i, tab, brands) &&
     // the two price-history sorts list only items whose price actually fell while tracked
     (sort !== "drop" || (dropped(i) || rose(i)) && !i.storewide) &&
-    (!g || i.group === g || i.group + "/" + i.kind === g || (g === "shops" && i.group !== "clothing")) && (!s || i.store === s) &&
+    (!picked.size || picked.has(leafOf(i))) && (!s || i.store === s) &&
     (i.off || 0) >= min && (!stock || i.avail === true) && (!mine || sizeOK(i)) &&
     fitsShown(i, gen) &&
     (!cat || (prefs.itemCats[i.id] || []).includes(cat)) &&
@@ -740,17 +771,17 @@ function counts(items, brands = followedBrands(items)) {
 }
 function render() {
   const items = pool(), brands = followedBrands(items), list = filtered(items, brands), grid = $("grid");
-  showChanges();
+  showChanges(); showBrandBox();
   grid.replaceChildren(...list.slice(0, shown).map(card));
   if (!list.length) grid.replaceChildren(el("div", "empty", tab === "brands" && !brands.size
-    ? "Star an item (☆) to see everything from its brand, on sale or not."
+    ? "Look up a brand above, or star an item (☆), to see everything from that brand, on sale or not."
     : tab === "wish" && !items.some(isFollowed) ? "Nothing followed yet. Star an item (☆) to keep track of it."
     : HISTORY_SORT[$("sort").value] ? "No tracked price changes match these filters yet. Prices are checked twice a day, so these lists grow over time."
     : "Nothing matches these filters."));
   const hs = HISTORY_SORT[$("sort").value];
   let text = list.length + (list.length === 1 ? " item" : " items") + (hs ? hs[dir < 0 ? 0 : 1] : "");
   if (tab === "brands" && list.length)                       // name only the brands that have something to show
-    text += " from brands you follow: " + [...new Set(list.map(i => brands.get(brandOf(i))))].sort().join(", ");
+    text += " from your brands: " + [...new Set(list.map(i => brands.get(brandOf(i))))].sort().join(", ");
   const parts = [text], calmBtn = label => { const b = el("button", null, label);
     b.onclick = () => { prefs.calm = !prefs.calm; $("calm").checked = prefs.calm; savePrefs(); reset(); }; return b; };
   if (tab !== "wish" && $("storecat").value !== "crowded" && CROWD.hosts.size) {
@@ -759,7 +790,7 @@ function render() {
       if (quiet) parts.push(" · " + quiet + " high-volume " + (quiet === 1 ? "store" : "stores") + " hidden (", calmBtn("show"), ")");
     } else {
       const big = DATA.items.filter(i => CROWD.hosts.has(i.store)).length;
-      parts.push(" · " + CROWD.hosts.size + " stores make up " + Math.round(big / DATA.items.length * 100) + "% of items (", calmBtn("hide them"), ")");
+      parts.push(" · " + (CROWD.hosts.size === 1 ? "1 store makes up " : CROWD.hosts.size + " stores make up ") + Math.round(big / DATA.items.length * 100) + "% of items (", calmBtn("hide them"), ")");
     }
   }
   const hours = DATA.generated ? (Date.now() - Date.parse(DATA.generated)) / 36e5 : null;
@@ -770,7 +801,7 @@ function render() {
   }
   $("count").replaceChildren(...parts);
   // phones: the Filters button says how many filters are set
-  const set = ["group", "store", "itemcat", "storecat", "gender"].filter(id => $(id).value).length + ($("minoff").value !== "0") +
+  const set = ["store", "itemcat", "storecat", "gender"].filter(id => $(id).value).length + (picked.size > 0) + ($("minoff").value !== "0") +
               ($("sort").value !== "best" || dir !== -1) + $("mysizes").checked + (tab === "wish" && $("stock").checked);
   $("filtersbtn").textContent = "Filters" + (set ? " · " + set : "");
   $("more").hidden = list.length <= shown;
@@ -781,6 +812,112 @@ function render() {
 function reset() { shown = PAGE; render(); }
 // What the price-history sorts list, said under the filters (prices are tracked from the day an item is first seen).
 const HISTORY_SORT = { drop: [" whose price changed while tracked", " whose price changed while tracked"] };
+
+// ---- category picker: clothing by kind, and each kind by type; other shops by group. Nothing ticked means any.
+// A box ticks everything under it ("Bottoms" is every type of bottoms). A kind's types stay folded away until
+// its arrow is clicked. An item's place in the tree is its leaf: "clothing/bottoms/jeans", "clothing/bottoms/"
+// for bottoms of no listed type, or just the group ("coffee") outside clothing.
+const KINDS = ["tops", "bottoms", "outerwear", "dresses", "footwear", "accessories", "other"];
+const TYPE_NAMES = {
+  tshirts: "T-shirts", shirts: "Shirts", polos: "Polos", sweatshirts: "Hoodies and sweatshirts", knitwear: "Knitwear", tanks: "Tanks and bras",
+  jeans: "Jeans", trousers: "Trousers", shorts: "Shorts", sweatpants: "Sweatpants", leggings: "Leggings", skirts: "Skirts", underwear: "Underwear",
+  jackets: "Jackets", coats: "Coats", blazers: "Blazers", vests: "Vests", dresses: "Dresses", jumpsuits: "Jumpsuits",
+  sneakers: "Sneakers", boots: "Boots", loafers: "Loafers and dress shoes", sandals: "Sandals", heels: "Heels and flats", slippers: "Slippers, clogs and mules",
+  bags: "Bags", hats: "Hats", jewelry: "Jewelry", eyewear: "Eyewear", belts: "Belts", wallets: "Wallets", watches: "Watches", socks: "Socks", scarves: "Scarves and gloves" };
+const GROUP_NAMES = { home: "Home & stationery", skate: "Skateboarding", other: "Other" };
+const capital = k => GROUP_NAMES[k] || k[0].toUpperCase() + k.slice(1);
+const leafOf = i => i.group === "clothing" ? "clothing/" + (i.kind || "other") + "/" + (i.type || "") : i.group;
+let CATS = [], picked = new Set(), opened = new Set();     // the tree; the ticked leaves; the kinds whose types are showing
+function buildCats() {
+  const have = new Set([...DATA.items, ...extras()].map(leafOf));
+  const kinds = KINDS.map(k => {
+    const at = "clothing/" + k + "/", name = k === "other" ? "Other clothing" : capital(k);
+    const subs = Object.keys(TYPE_NAMES).filter(t => have.has(at + t)).map(t => ({ key: at + t, name: TYPE_NAMES[t] }));
+    if (have.has(at)) subs.push({ key: at, name: subs.length ? "Other " + k : name });
+    return { id: k, name, subs };
+  }).filter(row => row.subs.length);
+  const shops = [...have].filter(k => !k.startsWith("clothing/")).sort().map(g => ({ id: g, name: capital(g), subs: [{ key: g, name: capital(g) }] }));
+  CATS = [{ name: "Clothing", rows: kinds }, { name: "Other shops", rows: shops }].filter(sec => sec.rows.length);
+  picked = new Set([...picked].filter(k => have.has(k)));
+  drawCats();
+}
+// The ticked categories by name, widest first: a whole section, else a whole kind, else single types.
+function pickedNames() {
+  const names = [], keys = row => row.subs.map(s => s.key), all = list => list.every(k => picked.has(k));
+  for (const sec of CATS) {
+    if (all(sec.rows.flatMap(keys))) { names.push(sec.name); continue; }
+    for (const row of sec.rows) names.push(...(all(keys(row)) ? [row.name] : row.subs.filter(s => picked.has(s.key)).map(s => s.name)));
+  }
+  return names;
+}
+function drawCats() {
+  const box = (keys, cls, text) => {                         // a tick box over some leaves: on, off, or partly on
+    const l = el("label", cls), c = el("input"), on = keys.filter(k => picked.has(k)).length;
+    c.type = "checkbox"; c.checked = on === keys.length; c.indeterminate = on > 0 && on < keys.length;
+    c.onchange = () => { for (const k of keys) c.checked ? picked.add(k) : picked.delete(k); drawCats(); reset(); };
+    l.append(c, text); return l;
+  };
+  const any = el("label", "head"), a = el("input"); a.type = "checkbox"; a.checked = !picked.size;
+  a.onchange = () => { picked.clear(); drawCats(); reset(); };
+  any.append(a, "Any category");
+  const rows = [any];
+  for (const sec of CATS) {
+    rows.push(box(sec.rows.flatMap(row => row.subs.map(s => s.key)), "head", sec.name + " (all)"));
+    for (const row of sec.rows) {
+      const many = row.subs.length > 1, open = many && opened.has(row.id), line = el("div", "line"), twist = el("button", "twist", many ? (open ? "▾" : "▸") : "");
+      twist.type = "button"; twist.disabled = !many;
+      if (many) {
+        twist.setAttribute("aria-expanded", open); twist.setAttribute("aria-label", "Types of " + row.name.toLowerCase());
+        twist.onclick = () => { open ? opened.delete(row.id) : opened.add(row.id); drawCats(); };
+      }
+      line.append(twist, box(row.subs.map(s => s.key), null, row.name + (open ? " (all)" : "")));
+      rows.push(line);
+      if (open) rows.push(...row.subs.map(s => box([s.key], "sub", s.name)));
+    }
+  }
+  $("catspanel").replaceChildren(...rows);
+  const names = pickedNames();
+  $("catslabel").textContent = !names.length ? "Any" : names[0] + (names.length > 1 ? " + " + (names.length - 1) + " more" : "");
+}
+
+// ---- brand lookup, on the "From my brands" tab: type a brand to see everything from it across the stores.
+// brands/index.json lists every brand in the catalogue with its item count; it is fetched when the box is first used.
+let BRAND_INDEX = null;
+function brandIndex() {
+  if (BRAND_INDEX) return Promise.resolve(BRAND_INDEX);
+  const onSale = new Map();                                  // brands that only have sale items are not in the file
+  for (const i of DATA.items) if (brandKey(i.brand)) onSale.set(brandKey(i.brand), [i.brand, (onSale.get(brandKey(i.brand)) || [0, 0])[1] + 1]);
+  return fetch("brands/index.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : []).catch(() => []).then(list => {
+    const all = new Map(list.map(([name, n]) => [brandKey(name), [name, n]]));
+    for (const [k, [name, n]] of onSale) all.set(k, [(all.get(k) || [name])[0], (all.get(k) || [0, 0])[1] + n]);
+    return BRAND_INDEX = [...all].map(([key, [name, n]]) => ({ key, name, n })).sort((a, b) => b.n - a.n);
+  });
+}
+function addBrand(key, name) { prefs.brands[key] = name; savePrefs(); loadBrands(); render(); }
+function showBrandBox() {
+  const box = $("brandbox");
+  box.hidden = tab !== "brands";
+  if (box.hidden || box.contains(document.activeElement)) return;   // don't redraw under someone typing
+  const input = el("input"), found = el("span", "chips");
+  input.type = "search"; input.placeholder = "Look up a brand"; input.setAttribute("aria-label", "Look up a brand");
+  input.oninput = () => brandIndex().then(index => {
+    const q = brandKey(input.value);
+    const hits = !q ? [] : index.filter(b => b.key.includes(q) && !(b.key in prefs.brands))
+      .sort((a, b) => b.key.startsWith(q) - a.key.startsWith(q) || b.n - a.n).slice(0, 8);
+    found.replaceChildren(...hits.map(b => {
+      const pick = el("button", null, b.name + " (" + b.n.toLocaleString() + ")");
+      pick.onclick = () => { input.blur(); addBrand(b.key, b.name); };
+      return pick;
+    }));
+    if (q && !hits.length) found.append(el("span", "meta", "No brand by that name in the stores tracked."));
+  });
+  const mine = Object.entries(prefs.brands).sort((a, b) => a[1].localeCompare(b[1])).map(([key, name]) => {
+    const b = el("button", null, name + " ✕"); b.title = "Stop showing " + name; b.setAttribute("aria-pressed", true);
+    b.onclick = () => { delete prefs.brands[key]; savePrefs(); buildCats(); render(); };
+    return b;
+  });
+  box.replaceChildren(...mine, input, found);
+}
 
 // ---- settings panel
 function chips(box, values, chosen) {
@@ -867,25 +1004,15 @@ function setup() {
     btn.onclick = () => { tab = key; reset(); };
     $("tabs").append(btn);
   }
-  // Category menu: each group, with clothing split into its kinds (value "clothing/tops").
-  const LABELS = { home: "Home & stationery", skate: "Skateboarding", other: "Other" };
-  const label = k => LABELS[k] || k[0].toUpperCase() + k.slice(1);
-  // Two headed groups: clothing with its kinds, then every other kind of shop ("shops" = all but clothing).
-  const opts = [new Option("All categories", "")];
-  const kinds = [...new Set(DATA.items.filter(i => i.group === "clothing" && i.kind).map(i => i.kind))]
-    .sort((a, b) => (a === "other") - (b === "other") || a.localeCompare(b));
-  opts.push(new Option("Clothing (all)", "clothing"));
-  for (const k of kinds) opts.push(new Option("   " + (k === "other" ? "Other clothing" : label(k)), "clothing/" + k));
-  const shops = [...new Set(DATA.items.map(i => i.group))].filter(g => g !== "clothing").sort();
-  if (shops.length) opts.push(new Option("Other shops (all)", "shops"), ...shops.map(g => new Option("   " + label(g), g)));
-  $("group").append(...opts);
+  buildCats();
+  document.addEventListener("click", e => { if ($("cats").open && !$("cats").contains(e.target)) $("cats").open = false; });
   const stores = [...new Map(DATA.items.map(i => [i.store, i.store_name])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
   $("store").append(new Option("All stores", ""), ...stores.map(([h, n]) => new Option(n, h)));
   fillCatMenus();
   $("sort").addEventListener("input", () => { dir = SORTS[$("sort").value].dir; showDir(); });   // before the redraw below
   $("dir").onclick = () => { dir = -dir; showDir(); reset(); };
   showDir();
-  for (const id of ["q", "group", "store", "itemcat", "storecat", "minoff", "sort", "stock", "mysizes"]) $(id).addEventListener("input", reset);
+  for (const id of ["q", "store", "itemcat", "storecat", "minoff", "sort", "stock", "mysizes"]) $(id).addEventListener("input", reset);
   $("gender").value = prefs.gender;                           // remembered between visits
   $("gender").addEventListener("input", () => { prefs.gender = $("gender").value; savePrefs(); reset(); });
   $("more").onclick = () => { shown += PAGE; render(); };
