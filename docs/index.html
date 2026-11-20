@@ -55,13 +55,13 @@
   .picker .twist { border: 0; background: none; width: 22px; padding: 2px 0; color: var(--muted); flex: none; font-size: 17px; line-height: 1; }
   .picker .twist:disabled { cursor: default; }
   .picker .panel label.sub { padding-left: 44px; }
-  /* the price range: two boxes and a row of ready-made ranges */
-  .picker .range { display: flex; gap: 10px; }
-  .picker .range label { color: var(--muted); }
-  .picker .range input { width: 7ch; flex: none; padding: 5px 6px; border-radius: 7px;
-                         border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
-  .picker .panel .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; white-space: normal; }
-  #pricepresets { margin-top: 8px; }
+  /* the price range: two boxes in the bar, in US dollars */
+  .filters .range { gap: 3px; }
+  .filters .range span { color: var(--muted); }
+  .filters .range input { width: 6ch; padding: 5px 4px; border-radius: 7px; text-align: center;
+                          border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  .filters .range input::-webkit-outer-spin-button,
+  .filters .range input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   @media (max-width: 700px) {                                   /* phones: the panel opens in place, full width */
     .picker[open] { flex: 1 1 100%; }
     .picker .panel { position: static; margin-top: 4px; max-height: none; max-width: none; box-shadow: none; }
@@ -194,17 +194,11 @@
       <option value="">Men's and women's</option><option value="m">Men's and unisex</option>
       <option value="w">Women's and unisex</option><option value="k">Kids</option>
     </select>
-    <details class="picker" id="prices">
-      <summary>Price: <span id="pricelabel">Any</span></summary>
-      <div class="panel" id="pricepanel">
-        <div class="range">
-          <label>Min <input type="number" id="pmin" min="0" step="10" inputmode="numeric" placeholder="0"></label>
-          <label>Max <input type="number" id="pmax" min="0" step="10" inputmode="numeric" placeholder="Any"></label>
-        </div>
-        <div class="chips" id="pricepresets"></div>
-        <p class="note" id="pricenote"></p>
-      </div>
-    </details>
+    <label class="range" title="Price in US dollars; leave either empty for no limit">$
+      <input type="number" id="pmin" min="0" step="1" inputmode="numeric" placeholder="min" aria-label="Lowest price">
+      <span>–</span>
+      <input type="number" id="pmax" min="0" step="1" inputmode="numeric" placeholder="max" aria-label="Highest price">
+    </label>
     <select id="minoff" aria-label="Minimum discount">
       <option value="0">Any discount</option><option value="20">20%+ off</option>
       <option value="30">30%+ off</option><option value="40">40%+ off</option>
@@ -848,34 +842,10 @@ function render() {
 }
 function reset() { shown = PAGE; render(); }
 
-// Ready-made ranges, and the words for whatever is set. Both ends are in US dollars.
-const PRICE_PRESETS = [["Any", null, null], ["Under $25", null, 25], ["Under $50", null, 50],
-                       ["$50–100", 50, 100], ["$100–250", 100, 250], ["$250–500", 250, 500], ["$500+", 500, null]];
+// The range in words, for the assistant's view of the screen.
 const priceWords = ([lo, hi]) =>
   lo == null && hi == null ? "Any" : lo == null ? "Under $" + hi : hi == null ? "$" + lo + "+"
   : lo === hi ? "$" + lo : "$" + lo + "–" + hi;
-
-function drawPrices() {
-  const [lo, hi] = priceRange();
-  $("pricelabel").textContent = priceWords([lo, hi]);
-  const box = $("pricepresets");
-  box.replaceChildren(...PRICE_PRESETS.map(([name, a, b]) => {
-    const btn = el("button", null, name);
-    btn.setAttribute("aria-pressed", String(a === lo && b === hi));
-    btn.onclick = () => {
-      $("pmin").value = a == null ? "" : a;
-      $("pmax").value = b == null ? "" : b;
-      drawPrices();
-      reset();
-    };
-    return btn;
-  }));
-  // say what is being compared, and whether anything on the list is quoted in another currency
-  const other = DATA.items.some(i => i.cur && i.cur !== "USD");
-  $("pricenote").textContent = other
-    ? "Compared in US dollars, so prices quoted in another currency are converted at the day's rate."
-    : "Both ends in US dollars. Leave one empty for no limit.";
-}
 // What the price-history sorts list, said under the filters (prices are tracked from the day an item is first seen).
 const HISTORY_SORT = { drop: [" whose price changed while tracked", " whose price changed while tracked"] };
 
@@ -1071,12 +1041,9 @@ function setup() {
     $("tabs").append(btn);
   }
   buildCats();
-  drawPrices();
-  // A click outside a menu closes it. composedPath is where the click landed: a click in the panel redraws it,
+  // A click outside the menu closes it. composedPath is where the click landed: a click in the panel redraws it,
   // so by now the thing clicked may have left the page, and contains() would call that an outside click.
-  document.addEventListener("click", e => {
-    for (const id of ["cats", "prices"]) if ($(id).open && !e.composedPath().includes($(id))) $(id).open = false;
-  });
+  document.addEventListener("click", e => { if ($("cats").open && !e.composedPath().includes($("cats"))) $("cats").open = false; });
   const stores = [...new Map(DATA.items.map(i => [i.store, i.store_name])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
   $("store").append(new Option("All stores", ""), ...stores.map(([h, n]) => new Option(n, h)));
   fillCatMenus();
@@ -1084,7 +1051,7 @@ function setup() {
   $("dir").onclick = () => { dir = -dir; showDir(); reset(); };
   showDir();
   for (const id of ["q", "store", "itemcat", "storecat", "minoff", "sort", "stock", "mysizes"]) $(id).addEventListener("input", reset);
-  for (const id of ["pmin", "pmax"]) $(id).addEventListener("input", () => { drawPrices(); reset(); });
+  for (const id of ["pmin", "pmax"]) $(id).addEventListener("input", reset);
   $("gender").value = prefs.gender;                           // remembered between visits
   $("gender").addEventListener("input", () => { prefs.gender = $("gender").value; savePrefs(); reset(); });
   $("more").onclick = () => { shown += PAGE; render(); };
