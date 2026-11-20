@@ -212,9 +212,10 @@ def served_currency(host):
         return None
 
 
-def shopify_single(host, handle):
+def shopify_single(host, handle, feed=None):
+    """One product. feed is the host that serves the store's Shopify data when the shop's own address doesn't."""
     url = f"https://{host}/products/{handle}"
-    status, body = get(url + ".js")
+    status, body = get(f"https://{feed or host}/products/{handle}.js")
     if status == 404:
         raise Gone()
     if status != 200:
@@ -751,12 +752,15 @@ def main():
         readings, whole = {}, False
         known = state.get(host, {}).get("products", {})
         wanted = set(wish_products.get(host, set()))
+        # "feed": a shop whose own address is a custom front end still serves its Shopify data from another
+        # host (often <name>.myshopify.com). Items keep the shop's address; only the reading goes there.
+        feed = store.get("feed", host)
         print(f"{host} ...", flush=True)
         try:
             if store["platform"] == "shopify":
                 if store.get("browse") or wanted:
                     # if the store won't say this time, assume the currency it used last time
-                    store["currency"] = served_currency(host) or state.get(host, {}).get("cur") \
+                    store["currency"] = served_currency(feed) or state.get(host, {}).get("cur") \
                         or store.get("currency", "USD")
                     if store["currency"] != state.get(host, {}).get("cur"):
                         known = {}               # prices tracked in another currency can't be compared
@@ -770,7 +774,7 @@ def main():
                         # "all": ["visvim"] does that for just those collections.
                         full = store.get("all") is True or c in (store.get("all") or [])
                         try:
-                            for n, p in enumerate(shopify_feed(host, path, max_pages), 1):
+                            for n, p in enumerate(shopify_feed(feed, path, max_pages), 1):
                                 if n == max_pages * 250:
                                     whole = False            # the page cap cut the catalogue short
                                 it = shopify_item(host, p)
@@ -801,7 +805,7 @@ def main():
                 for handle in sorted(wanted):
                     url = f"https://{host}/products/{handle}"
                     try:
-                        found.append((shopify_single(host, handle), "wish"))
+                        found.append((shopify_single(host, handle, feed), "wish"))
                     except Gone:  # taken down by the store: not our error
                         found.append((link_item(host, url, "No longer listed"), "wish"))
                     except Exception as e:
