@@ -60,8 +60,6 @@
   .filters .range span { color: var(--muted); }
   .filters .range input { width: 6ch; padding: 5px 4px; border-radius: 7px; text-align: center;
                           border: 1px solid var(--line); background: var(--card); color: var(--ink); }
-  .filters .range input::-webkit-outer-spin-button,
-  .filters .range input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   @media (max-width: 700px) {                                   /* phones: the panel opens in place, full width */
     .picker[open] { flex: 1 1 100%; }
     .picker .panel { position: static; margin-top: 4px; max-height: none; max-width: none; box-shadow: none; }
@@ -195,9 +193,9 @@
       <option value="w">Women's and unisex</option><option value="k">Kids</option>
     </select>
     <label class="range" title="Price in US dollars; leave either empty for no limit">$
-      <input type="number" id="pmin" min="0" step="1" inputmode="numeric" placeholder="min" aria-label="Lowest price">
+      <input type="text" id="pmin" inputmode="numeric" autocomplete="off" placeholder="min" aria-label="Lowest price">
       <span>–</span>
-      <input type="number" id="pmax" min="0" step="1" inputmode="numeric" placeholder="max" aria-label="Highest price">
+      <input type="text" id="pmax" inputmode="numeric" autocomplete="off" placeholder="max" aria-label="Highest price">
     </label>
     <select id="minoff" aria-label="Minimum discount">
       <option value="0">Any discount</option><option value="20">20%+ off</option>
@@ -563,7 +561,8 @@ function sizeOK(i) {
 // the store already quotes dollars). An item with no price at all cannot be in a range, so a set range hides it.
 const priceOf = i => i.usd ?? i.price ?? null;
 const priceRange = () => {
-  const n = id => { const v = parseFloat($(id).value); return isFinite(v) && v >= 0 ? v : null; };
+  // plain text boxes (a number box grows stepper arrows): whatever is typed around the number, "$1,200", is dropped
+  const n = id => { const v = parseFloat($(id).value.replace(/[^0-9.]/g, "")); return isFinite(v) ? v : null; };
   let [lo, hi] = [n("pmin"), n("pmax")];
   if (lo != null && hi != null && lo > hi) [lo, hi] = [hi, lo];   // typed the wrong way round
   return [lo, hi];
