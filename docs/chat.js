@@ -45,7 +45,7 @@ const TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Words that must all appear in the item's title, brand, store or category, for example \"needles track pant\". Leave out to browse by the other filters." },
+        query: { type: "string", description: "Words that must all appear in the item's title, brand, store or category, for example \"needles track pant\". A word found nowhere on the site is read as the nearest word that is, and the result then says so in query_read_as. Leave out to browse by the other filters." },
         category: { type: "string", description: "A site category: clothing, clothing/tops, clothing/bottoms, clothing/outerwear, clothing/dresses, clothing/footwear, clothing/accessories, coffee, tea, home, music, skate, sports or gear. A clothing kind can be narrowed to one type, for example clothing/bottoms/jeans: tops are tshirts, shirts, polos, sweatshirts, knitwear or tanks; bottoms are jeans, trousers, shorts, sweatpants, leggings, skirts or underwear; outerwear is jackets, coats, blazers or vests; footwear is sneakers, boots, loafers, sandals, heels or slippers; accessories are bags, hats, jewelry, eyewear, belts, wallets, watches, socks or scarves. Not every item has a type." },
         store: { type: "string", description: "Part of a store name, for example \"today clothing\"." },
         brand: { type: "string", description: "Part of a brand name, for example \"auralee\"." },
@@ -131,9 +131,9 @@ function brief(i) {
   return o;
 }
 function searchItems(a) {
-  const find = searcher(a.query || ""), has = (text, part) => !part || (text || "").toLowerCase().includes(part.toLowerCase());   // the page's own search
+  const all = [...DATA.items, ...extras()], find = searcher(a.query || "", all), has = (text, part) => !part || (text || "").toLowerCase().includes(part.toLowerCase());   // the page's own search
   const gen = { men: "m", women: "w", kids: "k" }[a.fits] || find && find.gender || "", brands = followedBrands(pool());
-  let list = [...DATA.items, ...extras()].filter(i => {
+  let list = all.filter(i => {
     if (ruledOut(i) || crowdedOut(i)) return false;
     return (!find || find.has(i)) &&
       (!a.category || [i.group, i.group + "/" + i.kind, i.group + "/" + i.kind + "/" + i.type].includes(a.category)) &&
@@ -153,7 +153,7 @@ function searchItems(a) {
               price_rise: (x, y) => riseShare(y) - riseShare(x),
               newest: (x, y) => (y.first_seen || "").localeCompare(x.first_seen || "") }[a.sort || "best"]);
   const limit = Math.min(Math.max(a.limit || 15, 1), 30);
-  return { site_last_updated: DATA.generated, total_matches: list.length, showing: Math.min(limit, list.length), items: list.slice(0, limit).map(brief) };
+  return { site_last_updated: DATA.generated, ...(find && find.fixed ? { query_read_as: find.fixed } : {}), total_matches: list.length, showing: Math.min(limit, list.length), items: list.slice(0, limit).map(brief) };
 }
 function showItems(a, into) {
   const byId = new Map(pool().map(i => [i.id, i])), found = a.ids.slice(0, 8).map(id => byId.get(id)).filter(Boolean);

@@ -609,33 +609,103 @@ function wordsOf(i) {
   }
   return w;
 }
+// The ways one typed word can be found in an item's words (see wordsOf).
+function waysOf(word, parts) {
+  const ways = [];
+  if (/\d/.test(word)) ways.push(word);                      // a number may sit inside a word: "990" in "M990GL6"
+  else {
+    ways.push(" " + word);                                   // the start of a word: "jack" finds "Jacket" as it is typed
+    const one = NO_SINGULAR.has(word) || word.length < 4 || /(ss|us|is)$/.test(word) ? ""
+      : /(s|x|z|ch|sh)es$/.test(word) ? word.slice(0, -2) : word.endsWith("s") ? word.slice(0, -1) : "";
+    if (one) ways.push(" " + one + " ");                     // "hoodies" finds "Hoodie", but "boots" not "Bootcut"
+  }
+  if (parts.length > 1) ways.push(" " + parts.join(" "));    // "off-white" also finds "Off White"
+  return ways;
+}
+// A slip of the fingers. A typed word that is nowhere on the site is read as the nearest word that is: one wrong,
+// missing, extra or swapped letter away (two in a word of eight letters or more), with the same first letter.
+// Words under four letters and words with numbers are never guessed at. A word only a few items hold (RARE) may be
+// a shop's own misspelling ("Jaket"), so it is searched as typed and also as a near word held by 20 times as many.
+// nearStart measures a typed word against
+// the start of a real one, since the last word of a search is often still being typed: how many slips apart, and
+// how much of the real word that start is. null when further apart than `most`.
+function nearStart(typed, word, most) {
+  const n = typed.length, m = Math.min(word.length, n + most);
+  let before = null, above = Array.from({ length: m + 1 }, (_, j) => j);
+  for (let i = 1; i <= n; i++) {
+    const row = [i];
+    let low = i;
+    for (let j = 1; j <= m; j++) {
+      let d = Math.min(above[j] + 1, row[j - 1] + 1, above[j - 1] + (typed[i - 1] !== word[j - 1]));
+      if (i > 1 && j > 1 && typed[i - 1] === word[j - 2] && typed[i - 2] === word[j - 1]) d = Math.min(d, before[j - 2] + 1);
+      row.push(d);
+      if (d < low) low = d;
+    }
+    if (low > most) return null;
+    before = above; above = row;
+  }
+  if (m === word.length && above[m] <= most) return { slips: above[m], whole: true, length: m };   // the whole word, if near enough
+  let length = m;
+  for (let j = m; j >= 0; j--) if (above[j] < above[length]) length = j;
+  return above[length] <= most ? { slips: above[length], whole: false, length } : null;
+}
+const RARE = 3;
+let VOCAB = null;   // every word the listed items hold, by first letter, with how many items hold it; and the guesses made
+// The nearest word to `word` that at least `floor` items hold, or "".
+function nearest(word, items, floor) {
+  if (!VOCAB || VOCAB.items !== items.length) {
+    const count = new Map(), by = {};
+    for (const i of items) for (const w of wordsOf(i).split(" ")) if (w.length > 2 && !/\d/.test(w)) count.set(w, (count.get(w) || 0) + 1);
+    for (const pair of count) (by[pair[0][0]] = by[pair[0][0]] || []).push(pair);
+    VOCAB = { items: items.length, by, guesses: new Map() };
+  }
+  const key = word + " " + floor;
+  if (!VOCAB.guesses.has(key)) {
+    const most = word.length >= 8 ? 2 : 1;
+    // a word on one item alone is likely a misspelling itself, so it comes last; then the fewest slips, a whole
+    // word over the start of one, and the commonest
+    let best = null;
+    for (const [w, held] of VOCAB.by[word[0]] || []) {
+      const near = held >= floor && w.length >= word.length - most && nearStart(word, w, most);
+      if (near && near.slips && (!best || ((held < 2) - (best.held < 2) || near.slips - best.slips || best.whole - near.whole || best.held - held) < 0))
+        best = { ...near, held, text: w.slice(0, near.length) };
+    }
+    VOCAB.guesses.set(key, best ? best.text : "");
+  }
+  return VOCAB.guesses.get(key);
+}
 // What a search asks for: has(item) says whether the item holds every word; gender is "m", "w" or "k" when a word
-// said whose it should be. null for an empty search.
-function searcher(text) {
-  let gender = "";
-  const needs = [];
+// said whose it should be. Given the items being searched, a word none of them holds is read as the nearest word
+// one of them does (a word few hold: as that too), and `fixed` is the search as it was read ("" when read as
+// typed). null for an empty search.
+function searcher(text, items) {
+  let gender = "", guessed = false;
+  const needs = [], read = [];
   for (const typed of plain(text).split(/\s+/)) {
     const parts = typed.split(/[^a-z0-9]+/).filter(Boolean), word = parts.join("");
-    if (!word || FILLER.has(word)) continue;
+    if (!word) continue;
+    read.push(typed);
+    if (FILLER.has(word)) continue;
     if (WHOSE[word]) { gender = WHOSE[word]; continue; }
-    const ways = [];
-    if (/\d/.test(word)) ways.push(word);                    // a number may sit inside a word: "990" in "M990GL6"
-    else {
-      ways.push(" " + word);                                 // the start of a word: "jack" finds "Jacket" as it is typed
-      const one = NO_SINGULAR.has(word) || word.length < 4 || /(ss|us|is)$/.test(word) ? ""
-        : /(s|x|z|ch|sh)es$/.test(word) ? word.slice(0, -2) : word.endsWith("s") ? word.slice(0, -1) : "";
-      if (one) ways.push(" " + one + " ");                   // "hoodies" finds "Hoodie", but "boots" not "Bootcut"
+    let ways = waysOf(word, parts);
+    if (items && parts.length === 1 && word.length > 3 && !/\d/.test(word)) {
+      let held = 0;
+      for (const i of items) if (ways.some(x => wordsOf(i).includes(x)) && ++held > RARE) break;
+      const near = held > RARE ? "" : nearest(word, items, held ? Math.max(20, held * 20) : 1);
+      if (near) { ways = waysOf(near, [near]).concat(held ? ways : []); read[read.length - 1] = near; guessed = true; }
     }
-    if (parts.length > 1) ways.push(" " + parts.join(" "));  // "off-white" also finds "Off White"
     needs.push(ways);
   }
   if (!needs.length && !gender) return null;
-  return { gender, has: i => { const w = wordsOf(i); return needs.every(ways => ways.some(x => w.includes(x))); } };
+  return { gender, fixed: guessed ? read.join(" ") : "",
+           has: i => { const w = wordsOf(i); return needs.every(ways => ways.some(x => w.includes(x))); } };
 }
 // ---- end of search
 
+let searchRead = "";   // the search as it was read, when a word of it was taken for a misspelling (shown on the count line)
 function filtered(items, brands) {
-  const find = searcher($("q").value), s = $("store").value;
+  const find = searcher($("q").value, items), s = $("store").value;
+  searchRead = find ? find.fixed : "";
   const [plo, phi] = priceRange();
   // Everything listed is in stock, so "In stock" only means something on the Followed tab
   const min = +$("minoff").value, stock = tab === "wish" && $("stock").checked, mine = $("mysizes").checked;
@@ -873,7 +943,7 @@ function render() {
   let text = list.length + (list.length === 1 ? " item" : " items") + (hs ? hs[dir < 0 ? 0 : 1] : "");
   if (tab === "brands" && list.length)                       // name only the brands that have something to show
     text += " from your brands: " + [...new Set(list.map(i => brands.get(brandOf(i))))].sort().join(", ");
-  const parts = [text], calmBtn = label => { const b = el("button", null, label);
+  const parts = searchRead ? ["Showing results for ", el("b", null, searchRead), " · ", text] : [text], calmBtn = label => { const b = el("button", null, label);
     b.onclick = () => { prefs.calm = !prefs.calm; $("calm").checked = prefs.calm; savePrefs(); reset(); }; return b; };
   if (tab !== "wish" && $("storecat").value !== "crowded" && CROWD.hosts.size) {
     if (prefs.calm) {
