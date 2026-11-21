@@ -181,7 +181,7 @@
 <header>
   <div class="tabs" id="tabs"></div>
   <div class="filters">
-    <input type="search" id="q" placeholder="Search title, brand, store" aria-label="Search">
+    <input type="search" id="q" placeholder="Search, e.g. acne studios jeans" aria-label="Search">
     <button class="pill" id="filtersbtn" aria-expanded="false">Filters</button>
     <details class="picker" id="cats">
       <summary>Category: <span id="catslabel">Any</span></summary>
@@ -574,11 +574,72 @@ function inPrice(i, lo, hi) {
   return p != null && (lo == null || p >= lo) && (hi == null || p <= hi);
 }
 
+// ---- search. The words typed may come in any order, and each must be found in the item: at the start of a word
+// of its title, brand or store, or as what the item is ("jeans" finds jeans whose name never says so, see WHAT).
+// "mens", "womens" and "kids" are read as the Men's / Women's menu is, and say whose it is in place of the menu.
+// Spelling is evened out first, so "levis", "apc", "chloe" and "tshirt" find Levi's, A.P.C., Chloé and T-Shirt.
+const WHAT_KIND = { tops: "top", bottoms: "bottoms", outerwear: "outerwear", footwear: "footwear shoe", accessories: "accessory accessories" };
+const WHAT = {   // words true of everything of a type, whatever its title says
+  tshirts: "tshirt", shirts: "shirt", polos: "polo", sweatshirts: "sweatshirt", knitwear: "knitwear knit sweater",
+  jeans: "jeans denim", trousers: "trousers pants", shorts: "shorts", sweatpants: "sweatpants pants", leggings: "leggings",
+  skirts: "skirt", underwear: "underwear", jackets: "jacket", coats: "coat", blazers: "blazer", vests: "vest",
+  dresses: "dress", jumpsuits: "jumpsuit", sneakers: "sneaker trainers", boots: "boot", sandals: "sandal", bags: "bag",
+  hats: "hat", jewelry: "jewelry jewellery", eyewear: "eyewear", belts: "belt", wallets: "wallet", watches: "watch", socks: "sock" };
+const WHOSE = { men: "m", mens: "m", male: "m", women: "w", womens: "w", woman: "w", ladies: "w", female: "w",
+                kids: "k", kid: "k", boys: "k", girls: "k", children: "k", childrens: "k", youth: "k" };
+const FILLER = new Set(["a", "an", "and", "for", "in", "of", "the", "with"]);
+const NO_SINGULAR = new Set(["shorts", "glasses", "tights", "briefs", "flats", "trunks"]);   // "short" is another word
+// Lower case, no accents, and one spelling for a T-shirt.
+function plain(s) {
+  s = (s || "").toLowerCase();
+  if (/[^\x00-\x7f]/.test(s))
+    s = s.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/œ/g, "oe").replace(/æ/g, "ae").replace(/ø/g, "o").replace(/[‘’`]/g, "'");
+  return s.replace(/\bt[ -]?shirt/g, "tshirt").replace(/\btees?\b/g, "tshirt");
+}
+// The words of an item, between spaces. A word written with marks inside it is kept both ways:
+// "A.P.C." as "a p c" and "apc", "Off-White" as "off white" and "offwhite".
+const WORDS = new WeakMap();
+function wordsOf(i) {
+  let w = WORDS.get(i);
+  if (w === undefined) {
+    const s = plain(i.title + " " + (i.brand || "") + " " + i.store_name);
+    const joined = (s.match(/[a-z0-9]+(?:['.&-][a-z0-9]+)+/g) || []).map(x => x.replace(/[^a-z0-9]/g, ""));
+    const what = (i.group || "") + " " + (WHAT_KIND[i.kind] || "") + " " + (WHAT[i.type] || "");
+    WORDS.set(i, w = " " + (s + " " + joined.join(" ") + " " + what).replace(/[^a-z0-9]+/g, " ").trim() + " ");
+  }
+  return w;
+}
+// What a search asks for: has(item) says whether the item holds every word; gender is "m", "w" or "k" when a word
+// said whose it should be. null for an empty search.
+function searcher(text) {
+  let gender = "";
+  const needs = [];
+  for (const typed of plain(text).split(/\s+/)) {
+    const parts = typed.split(/[^a-z0-9]+/).filter(Boolean), word = parts.join("");
+    if (!word || FILLER.has(word)) continue;
+    if (WHOSE[word]) { gender = WHOSE[word]; continue; }
+    const ways = [];
+    if (/\d/.test(word)) ways.push(word);                    // a number may sit inside a word: "990" in "M990GL6"
+    else {
+      ways.push(" " + word);                                 // the start of a word: "jack" finds "Jacket" as it is typed
+      const one = NO_SINGULAR.has(word) || word.length < 4 || /(ss|us|is)$/.test(word) ? ""
+        : /(s|x|z|ch|sh)es$/.test(word) ? word.slice(0, -2) : word.endsWith("s") ? word.slice(0, -1) : "";
+      if (one) ways.push(" " + one + " ");                   // "hoodies" finds "Hoodie", but "boots" not "Bootcut"
+    }
+    if (parts.length > 1) ways.push(" " + parts.join(" "));  // "off-white" also finds "Off White"
+    needs.push(ways);
+  }
+  if (!needs.length && !gender) return null;
+  return { gender, has: i => { const w = wordsOf(i); return needs.every(ways => ways.some(x => w.includes(x))); } };
+}
+// ---- end of search
+
 function filtered(items, brands) {
-  const q = $("q").value.trim().toLowerCase(), s = $("store").value;
+  const find = searcher($("q").value), s = $("store").value;
   const [plo, phi] = priceRange();
   // Everything listed is in stock, so "In stock" only means something on the Followed tab
-  const min = +$("minoff").value, stock = tab === "wish" && $("stock").checked, mine = $("mysizes").checked, gen = $("gender").value;
+  const min = +$("minoff").value, stock = tab === "wish" && $("stock").checked, mine = $("mysizes").checked;
+  const gen = find && find.gender || $("gender").value;      // "kids jeans" in the search box outranks the menu
   const cat = $("itemcat").value.slice(2);
   const sort = $("sort").value;
   const list = items.filter(i =>
@@ -590,7 +651,7 @@ function filtered(items, brands) {
     inPrice(i, plo, phi) &&
     fitsShown(i, gen) &&
     (!cat || (prefs.itemCats[i.id] || []).includes(cat)) &&
-    (!q || (i.title + " " + (i.brand || "") + " " + i.store_name).toLowerCase().includes(q)));
+    (!find || find.has(i)));
   const key = SORTS[sort].key, keys = new Map(list.map(i => [i, key(i, brands)]));
   const cmp = (x, y) => typeof x === "string" ? x.localeCompare(y) : x - y;
   list.sort((a, b) => {

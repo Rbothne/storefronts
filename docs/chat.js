@@ -131,12 +131,11 @@ function brief(i) {
   return o;
 }
 function searchItems(a) {
-  const words = (a.query || "").toLowerCase().split(/\s+/).filter(Boolean), has = (text, part) => !part || (text || "").toLowerCase().includes(part.toLowerCase());
-  const gen = { men: "m", women: "w", kids: "k" }[a.fits] || "", brands = followedBrands(pool());
+  const find = searcher(a.query || ""), has = (text, part) => !part || (text || "").toLowerCase().includes(part.toLowerCase());   // the page's own search
+  const gen = { men: "m", women: "w", kids: "k" }[a.fits] || find && find.gender || "", brands = followedBrands(pool());
   let list = [...DATA.items, ...extras()].filter(i => {
     if (ruledOut(i) || crowdedOut(i)) return false;
-    const text = (i.title + " " + (i.brand || "") + " " + i.store_name + " " + i.group + " " + (i.kind || "") + " " + (i.type || "")).toLowerCase();
-    return words.every(w => text.includes(w)) &&
+    return (!find || find.has(i)) &&
       (!a.category || [i.group, i.group + "/" + i.kind, i.group + "/" + i.kind + "/" + i.type].includes(a.category)) &&
       has(i.store_name, a.store) && has(i.brand, a.brand) &&
       (a.max_price_usd == null || (i.usd ?? i.price ?? Infinity) <= a.max_price_usd) &&
