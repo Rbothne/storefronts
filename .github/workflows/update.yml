@@ -34,7 +34,7 @@ jobs:
     timeout-minutes: 60
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.redeploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -142,7 +142,23 @@ jobs:
         with:
           path: docs
 
+      # The deploy asks GitHub for the bundle the step above uploaded. Asked in the same second, GitHub sometimes
+      # answers that no such bundle exists yet ("No artifacts named "github-pages" were found"): 14 runs failed
+      # that way, with the data saved but the page not published. So wait a little first, and if the deploy
+      # still fails, wait longer and try once more; only that second try can fail the run.
+      - name: Let the upload settle
+        run: sleep 10
+
       - id: deploy
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: Wait before deploying again
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 45
+
+      - id: redeploy
+        if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v4
 
       # Start the next run 20 minutes after this one began, as a "cycle" run. If another run is already waiting
