@@ -176,8 +176,9 @@ def gender(text, ptype):
     both = text + " " + ptype
     if re.search(r"\b(kids|kid['’]s|youth|toddlers?|infants?)\b", both) or re.search(r"\b(boys|girls)\b", ptype):
         return "k"
-    w = re.search(r"\b(wom[ae]n['’]?s?|wmns|ladies|donna|skirts?|gonn[ae]|blouses?|dress(es)?(?! (shirt|pant|shoe|sock|trouser|boot)))\b", both)
-    m = re.search(r"\b(men['’]?s?|uomo)\b", both) or re.search(r"\bman\b", ptype)
+    # "female" and "male" are how some stores (Everlane) tag every product, and the only place they say it
+    w = re.search(r"\b(wom[ae]n['’]?s?|wmns|ladies|female|donna|skirts?|gonn[ae]|blouses?|dress(es)?(?! (shirt|pant|shoe|sock|trouser|boot)))\b", both)
+    m = re.search(r"\b(men['’]?s?|male|uomo)\b", both) or re.search(r"\bman\b", ptype)
     return "w" if w and not m else "m" if m and not w else None
 
 
@@ -398,7 +399,8 @@ def listing_item(host, store, d):
 RULES = [(re.compile(r"\b(%s)\b" % rx, re.I), cat) for rx, cat in [
     (r"hats?|caps?|beanies?|berets?|balaclavas?|headwear|socks?|gloves?|mitt(s|ens)?|scar(f|ves)|leg warmers"
      r"|cappell[oi]|sciarp[ae]|calz(e|ini)|guanti", "clothing/accessories"),
-    (r"shoes?|sneakers?|boots?|sandals?|loafers?|footwear|slippers?|mules?|clogs?|(low|mid|high)[- ]tops?"
+    # "flats" and "heels" only in the plural: a "Flat Front Pant" is not a shoe
+    (r"shoes?|sneakers?|boots?|sandals?|loafers?|footwear|slippers?|mules?|clogs?|flats|heels|(low|mid|high)[- ]tops?"
      r"|scarp[ae]|stival(i|etti)|sandali|mocassini|d[eé]collet[eé]s?|pumps|ballerin[ae]|espadrilles?", "clothing/footwear"),
     (r"pants?|sweatpants?|trackpants?|\w*shorts|jeans?|trousers?|tights|leggings?|joggers?|skirts?|bottoms?|full-length"
      r"|pantalon[ei]|gonn[ae]|bermuda", "clothing/bottoms"),
@@ -495,6 +497,10 @@ SNEAKER_MAKERS = re.compile(r"\b(nike|jordan|adidas|new balance|asics|converse|v
 
 def item_type(kind, ptype, title, brand=""):
     """The finer type of a clothing item within its kind ("jeans"), or None."""
+    # As a product type, "Knit Tops" is a store's shelf for its jersey tees and sweatshirts (Everlane), not for
+    # sweaters, so only the title decides. A title that says "Knit Top" still counts as knitwear.
+    if re.fullmatch(r"\s*knit tops?\s*", ptype, re.I):
+        ptype = ""
     text = f"{ptype} {title}"
     for rx, name in TYPES.get(kind, ()):
         if rx.search(text):
