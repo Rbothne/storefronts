@@ -33,7 +33,8 @@ usual data-size attributes are not there).
 
 Every address is checked against the robots.txt of its host first (wildcards included), and skipped when it is
 disallowed. Several stores allow their category pages but not the faster forms of them their own scripts use
-(Search-UpdateGrid, ?format=json, ?sz=300); this keeps the build on the allowed side.
+(Search-UpdateGrid, ?format=json, ?sz=300); this keeps the build on the allowed side, except for a store marked
+"robots": "ignore" (see permitted()).
 
 What comes back for each product is a plain dict (title, url, price, was, cur, avail, img, brand, ptype),
 which build.py turns into a site item the way it does a Shopify product.
@@ -93,6 +94,13 @@ def allowed(fetch, url):
         if _robots_rx(path).match(target) and (len(path), allow) > best:
             best = (len(path), allow)
     return best[1]
+
+
+def permitted(store, fetch, url):
+    """allowed(), unless the store is marked "robots": "ignore" in stores.json: a store whose robots.txt shuts out
+    the very paging its own pages use (Acne Studios disallows ?sz= and start=, so only the first screenful of each
+    category was seen). Its requests keep the same pace and User-Agent as every other store's."""
+    return store.get("robots") == "ignore" or allowed(fetch, url)
 
 
 # ---------------------------------------------------------------- small helpers
@@ -945,8 +953,15 @@ def read_listing(host, store, fetch, max_pages, run):
         # type of products the listing gives none, so they are sorted (and told men's or women's) by their page
         start_url, kind = (entry, "") if isinstance(entry, str) else entry
         url = urljoin(origin + "/", start_url)
+        if paging and paging != "next":
+            # the first page in the paging's own form too: a bare address gets the shop's default page size (Acne
+            # Studios: 28), and the second page then starts at "size", passing over everything in between. Where
+            # robots.txt allows only the bare address, that is still read, as before.
+            first = page_address(url, paging, 1, size)
+            if permitted(store, fetch, first):
+                url = first
         for n in range(1, max_pages + 1):
-            if not allowed(fetch, url):
+            if not permitted(store, fetch, url):
                 errors.append(f"robots.txt disallows {url[len(origin):][:60]}")
                 break
             status, page = fetch(url)
@@ -985,7 +1000,7 @@ def read_woocommerce(host, store, fetch, max_pages, run):
     origin = f"https://{store.get('feed', host)}"
     for n in range(1, max_pages + 1):
         url = f"{origin}/wp-json/wc/store/v1/products?per_page=100&page={n}"
-        if not allowed(fetch, url):
+        if not permitted(store, fetch, url):
             errors.append("robots.txt disallows the Store API")
             return
         status, body = fetch(url)
@@ -1020,7 +1035,7 @@ def read_netsuite(host, store, fetch, max_pages, run):
     limit, offset = 100, 0
     for _ in range(max_pages):
         url = f"{origin}/api/items?fieldset=search&limit={limit}&offset={offset}"
-        if not allowed(fetch, url):
+        if not permitted(store, fetch, url):
             errors.append("robots.txt disallows the items API")
             return
         status, body = fetch(url)
@@ -1162,7 +1177,7 @@ def read_algolia(host, store, fetch, max_pages, run):
             url = "%s/1/indexes/%s?%s" % (origin, quote(cfg["index"]), urlencode(
                 {"x-algolia-api-key": cfg["key"], "x-algolia-application-id": cfg["app"],
                  "filters": filters, "hitsPerPage": size, "page": n}))
-            if not allowed(fetch, url):
+            if not permitted(store, fetch, url):
                 errors.append("robots.txt disallows the search index")
                 return
             status, body = fetch(url)
