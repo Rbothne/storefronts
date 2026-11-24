@@ -140,9 +140,9 @@
                                                       border-radius: 5px; background: var(--chip); margin-bottom: 3px; }
   #compare .swatches b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #compare li { margin: 3px 0; }
-  #more, #fullmore, #fullbrowse { display: block; margin: 18px auto 0; padding: 9px 18px; border-radius: 8px;
+  #more, #fullmore { display: block; margin: 18px auto 0; padding: 9px 18px; border-radius: 8px;
           border: 1px solid var(--line); background: var(--card); }
-  #more[hidden], #fullmore[hidden], #fullbrowse[hidden], #fullsec[hidden], .filters [hidden] { display: none; }
+  #more[hidden], #fullmore[hidden], #fullsec[hidden], .filters [hidden] { display: none; }
   /* full-price results, below the sale results */
   #fullsec { margin-top: 30px; padding-top: 14px; border-top: 1px solid var(--line); }
   #fullsec h2 { font-size: 16px; margin: 0 0 2px; }
@@ -238,6 +238,7 @@
     <button class="pill" id="dir" title="Reverse the order"></button>
     <label><input type="checkbox" id="stock"> In stock</label>
     <label><input type="checkbox" id="mysizes"> My sizes</label>
+    <label title="Hide the full-price items below the list"><input type="checkbox" id="saleonly"> Discounts only</label>
     <button class="pill" id="opensettings">Settings</button>
     <button class="pill" id="openchat">Ask the assistant</button>
   </div>
@@ -251,7 +252,6 @@
   <section id="fullsec" hidden aria-labelledby="fullhead">
     <h2 id="fullhead"></h2>
     <p id="fullnote" class="meta"></p>
-    <button id="fullbrowse" hidden>Show every full-price item</button>
     <div class="grid" id="fullgrid"></div>
     <button id="fullmore" hidden>Show more</button>
   </section>
@@ -371,7 +371,7 @@ function loadPrefs(text) {
   const p = JSON.parse(text);
   prefs = { follows: p.follows || {}, itemCats: p.itemCats || {}, kept: p.kept || {}, storeCats: p.storeCats || {},
             hidden: p.hidden || {}, muted: p.muted || {}, gender: p.gender || "", notes: p.notes || [], calm: !!p.calm,
-            changes: p.changes || [], brands: p.brands || {}, full: p.full !== false,
+            changes: p.changes || [], brands: p.brands || {}, full: p.full !== false, saleOnly: !!p.saleOnly,
             sizes: { tops: [], bottoms: [], shoes: [], ...(p.sizes || {}) } };
 }
 function savePrefs() { try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch (e) {} }
@@ -1150,7 +1150,7 @@ function render(typed = false) {
   // phones: the Filters button says how many filters are set
   const set = ["store", "itemcat", "storecat", "gender"].filter(id => $(id).value).length + (picked.size > 0) + ($("minoff").value !== "0") +
               (priceRange().some(v => v != null) ? 1 : 0) +
-              ($("sort").value !== "best" || dir !== -1) + $("mysizes").checked + (tab === "wish" && $("stock").checked);
+              ($("sort").value !== "best" || dir !== -1) + $("mysizes").checked + (tab === "wish" && $("stock").checked) + prefs.saleOnly;
   $("filtersbtn").textContent = "Filters" + (set ? " · " + set : "");
   $("more").hidden = list.length <= shown;
   $("more").textContent = "Show more (" + (list.length - shown) + " left)";
@@ -1171,12 +1171,12 @@ function searchTyped() { clearTimeout(typing); typing = setTimeout(() => { shown
 // from everything.json (packed by write_everything() in build.py), searched in a background worker that runs the
 // page's own search code, so typos, "jeans" and "womens" read the same as above. A tile the sale results already show
 // is left out (its panel lists the full-price stores), and the section counts tiles like the grid.
-// With nothing searched, the same section offers every full-price item, under the same filters as the list above.
-// That is the whole of everything.json in this tab, so it loads only when asked (the "Show every" button): the
-// worker hands its rows over once, and the filters run over them like the list's.
+// With nothing searched, the same section shows every full-price item, under the same filters as the list above:
+// the worker hands all of everything.json's rows over once, and the filters run over them like the list's.
+// "Discounts only" (a tick box beside the filters, kept in prefs) hides the section, searched or not.
 let LAST = { list: [], brands: new Map() }, fullShown = PAGE;
 const FULL = { worker: null, ready: false, failed: false, stores: null, seq: 0, asked: "", answered: "", hits: [], total: 0, gender: "", fixed: "",
-               browse: false, allAsked: false, all: null };
+               allAsked: false, all: null };
 const FULL_CAP = 20000;                                      // hits handed back per search; beyond that the count says "+"
 // Brands a search names: a run of its words spelled as a brand ("acne studios"), a word that only one brand's titles
 // use as its first word ("acne"), or a near miss of a brand's name in a long word ("jacqemus"). Words many brands use
@@ -1274,8 +1274,7 @@ function unpack(r) {                                         // a row of everyth
 }
 function drawFull() {
   const sec = $("fullsec"), q = $("q").value.trim(), note = $("fullnote");
-  $("fullbrowse").hidden = true;
-  if (tab !== "all") { sec.hidden = true; return; }
+  if (tab !== "all" || prefs.saleOnly) { sec.hidden = true; return; }
   if (!q) { drawBrowse(); return; }
   let items, head, searched = false, extra = "";
   if (prefs.full && !FULL.failed) {
@@ -1314,16 +1313,10 @@ function drawBrowse() {
   if (!prefs.full || FULL.failed) { sec.hidden = true; return; }   // searching everything is switched off in Settings
   sec.hidden = false;
   const empty = text => { $("fullhead").textContent = head; note.textContent = text; $("fullgrid").replaceChildren(); $("fullmore").hidden = true; };
-  if (!FULL.browse) {
-    empty("Everything else the tracked stores have in stock at full price" + (FULL.count ? " (" + FULL.count.toLocaleString() + " items)" : "") +
-          ", under the filters above. A large download, so it loads when asked.");
-    $("fullbrowse").hidden = false;
-    return;
-  }
   startWorker();
   if (!FULL.all) {
     if (FULL.ready && !FULL.allAsked) { FULL.allAsked = true; FULL.worker.postMessage({ all: true }); }
-    empty("Loading every in-stock full-price item, once per visit…");
+    empty("Loading every in-stock full-price item, once per visit… (tick “Discounts only” to skip them)");
     return;
   }
   const list = filtered(FULL.all, LAST.brands, { skip: new Set(LAST.list.map(i => tileKey(i)).filter(Boolean)), searched: false, gender: "" });
@@ -1549,7 +1542,8 @@ function setup() {
   $("gender").addEventListener("input", () => { prefs.gender = $("gender").value; savePrefs(); reset(); });
   $("more").onclick = () => { shown += PAGE; render(); };
   $("fullmore").onclick = () => { fullShown += PAGE; drawFull(); };
-  $("fullbrowse").onclick = () => { FULL.browse = true; fullShown = PAGE; drawFull(); };
+  $("saleonly").checked = prefs.saleOnly;
+  $("saleonly").addEventListener("input", () => { prefs.saleOnly = $("saleonly").checked; savePrefs(); fullShown = PAGE; reset(); });
   $("fullswitch").checked = prefs.full;
   $("fullswitch").addEventListener("input", () => { prefs.full = $("fullswitch").checked; savePrefs(); fullShown = PAGE; drawFull(); });
 
