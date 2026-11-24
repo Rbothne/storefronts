@@ -962,6 +962,7 @@ def read_listing(host, store, fetch, max_pages, run):
         # type of products the listing gives none, so they are sorted (and told men's or women's) by their page
         start_url, kind = (entry, "") if isinstance(entry, str) else entry
         url = urljoin(origin + "/", start_url)
+        bare = url
         if paging and paging != "next":
             # the first page in the paging's own form too: a bare address gets the shop's default page size (Acne
             # Studios: 28), and the second page then starts at "size", passing over everything in between. Where
@@ -974,6 +975,11 @@ def read_listing(host, store, fetch, max_pages, run):
                 errors.append(f"robots.txt disallows {url[len(origin):][:60]}")
                 break
             status, page = fetch(url)
+            if n == 1 and status == 403 and url != bare:
+                # some edges refuse the paged form of a first page and serve the bare one (Yeti, from GitHub's
+                # machines): read that, as before the paged form was asked for
+                url = bare
+                status, page = fetch(url)
             if status != 200:
                 # the end of a listing can answer 404; a refusal or a failed first page is an error
                 if n == 1 or status in (0, 403, 429) or status >= 500:

@@ -24,10 +24,9 @@ never checked against robots.txt by the code, only by choice. Moved out of the t
 - **Acne Studios** (was read, 28 items a category) — `?start=0&sz=96`: 560 products.
 - **ba&sh** — its tiles read with `via: tiles`, paged `?start={start}&sz=60`: 616 products (no "was" prices in
   the tiles; markdowns show as tracked drops).
-- **PacSun** — `?start={start}&sz=96` on the two sale listings gives 117 tiles a page instead of 15 (1,105
-  products before it stopped answering). **It turned this machine away (HTTP 403 on every page, page one
-  included) after about 16 pages of 2.4 MB a second and a half apart**, so it is read with an 8-second delay
-  and 10 pages a listing. Whether that is slow enough has not been seen yet: check its status line.
+- **PacSun** — read for one night, then taken out: below the site's tier (a mall chain), and it refused every
+  page, page one included, both from this machine (after ~16 pages of 2.4 MB) and from GitHub's. Its sale
+  listings do page with `?start={start}&sz=96` (117 tiles a page, `via: tiles`) if it is ever wanted back.
 
 Looked at and left: Ecco and Blue Nile ignore their paging parameter (page two is page one again), and Foot
 Locker and Champs Sports do too (`currentPage=1` serves page 1), so setting robots.txt aside gains nothing there.
