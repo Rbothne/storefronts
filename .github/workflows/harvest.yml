@@ -2,9 +2,9 @@ name: Harvest guarded stores
 
 # A few shops answer HTTP 403 (or a Cloudflare challenge) to anything their edge does not take for a person's
 # browser. Those are marked "read": "harvest" in stores.json: this run opens their pages in a real Chromium once
-# a day, pulls the products out with the same extractors the build uses, and leaves the result on the data branch
-# as harvest/<host>.json for the hourly build to read from disk. The build itself never goes near these stores
-# and stays standard-library-only.
+# a day, pulls the products out with the same extractors the build uses, and leaves the result on its own
+# "harvest" branch as harvest/<host>.json; each build copies that branch in and reads the stores from disk. The
+# build itself never goes near these stores and stays standard-library-only.
 #
 # These edges judge the client's ADDRESS as much as its fingerprint, and a GitHub-hosted runner is a datacenter
 # address that many of them refuse outright. Set the repository variable HARVEST_RUNNER to the label of a
@@ -25,12 +25,19 @@ on:
         type: choice
         options: ["no", "yes"]
         default: "no"
+  push:                         # a change to the harvest itself is tried at once rather than the next morning
+    branches: [main]
+    paths: ["tools/harvest.py", ".github/workflows/harvest.yml"]
 
 permissions:
-  contents: write               # to replace the data branch
+  contents: write               # to replace the harvest branch
 
+# Its own queue and its own branch. It used to share the build's queue so the two could not rewrite the data branch
+# under each other, but GitHub keeps only one waiting run per queue: the build is running most of every hour, so
+# each build that queued behind it cancelled the waiting harvest, and no harvest ever ran. With the results on a
+# branch the build only reads, the two cannot collide.
 concurrency:
-  group: update-listings        # the same group as the build: neither may rewrite the data branch under the other
+  group: harvest
   cancel-in-progress: false
 
 jobs:
@@ -45,13 +52,13 @@ jobs:
           python3 -m pip install --quiet playwright
           python3 -m playwright install --with-deps chromium
 
-      # Everything the data branch holds, so this run can put back what it does not change.
-      - name: Get the latest data
+      # The last harvest, so a store that refuses this time keeps what it had (the branch is missing until the
+      # first run saves one).
+      - name: Get the last harvest
         run: |
           before="$RUNNER_TEMP/before"
           mkdir -p "$before" data/harvest
-          git fetch --depth=1 origin data
-          git archive FETCH_HEAD | tar -x -C "$before"
+          if git fetch --depth=1 origin harvest; then git archive FETCH_HEAD | tar -x -C "$before"; fi
           if [ -d "$before/harvest" ]; then cp -r "$before/harvest/." data/harvest/; fi
           ls -l data/harvest || true
 
@@ -85,8 +92,7 @@ jobs:
             echo "::warning::at least one store refused this runner's address; see the log above"
           fi
 
-      # Replace the data branch with its own contents plus the new harvest, as a single commit, the way the build
-      # does. Nothing else on the branch is touched.
+      # Replace the harvest branch with a single commit holding harvest/, the way the build keeps the data branch.
       - name: Save the harvest
         env:
           GIT_AUTHOR_NAME: github-actions[bot]
@@ -96,10 +102,8 @@ jobs:
         run: |
           out="$RUNNER_TEMP/out"
           mkdir -p "$out"
-          cp -r "$RUNNER_TEMP/before/." "$out/" 2>/dev/null || true
-          rm -rf "$out/harvest"
           cp -r data/harvest "$out/harvest"
           export GIT_INDEX_FILE="$RUNNER_TEMP/data.index"
           git --git-dir="$PWD/.git" --work-tree="$out" add -A .
           commit=$(git commit-tree "$(git write-tree)" -m "Harvest of the guarded stores, $(date -u +%Y-%m-%dT%H:%MZ)")
-          git push --force origin "$commit:refs/heads/data"
+          git push --force origin "$commit:refs/heads/harvest"
