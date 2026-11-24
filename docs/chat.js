@@ -40,7 +40,7 @@ Style: direct and conversational, like a knowledgeable friend. Lead with the ans
 const TOOLS = [
   {
     name: "search_site_items",
-    description: "Search the items currently listed on the site. Use this before recommending anything. Every filter is optional; combine them to narrow down. Returns the number of matches and the top results with price, discount, sizes in stock and a link. Stores and brands the person hid on the site are left out. The site lists sale items; for the brands the person follows it also has the full-price range (those results have no discount), so set min_discount when they only want markdowns. The same item sold at several stores comes back once, with other_stores (every other store's price, full-price listings included, so compare usd) and, where known, sold_before (stores that had it and what they charged).",
+    description: "Search the items currently listed on the site. Use this before recommending anything. Every filter is optional; combine them to narrow down. Returns the number of matches and the top results with price, discount, sizes in stock and a link. Stores and brands the person hid on the site are left out. The site lists sale items; for the brands the person follows it also has the full-price range (those results have no discount), so set min_discount when they only want markdowns. The same item sold at several stores, or in several colours, comes back once, with other_stores (every other store's price for the same colour, full-price listings included, so compare usd), other_colours (each other colourway's best price) and, where known, sold_before (stores that had it and what they charged).",
     eager_input_streaming: true,
     input_schema: {
       type: "object",
@@ -153,16 +153,20 @@ async function searchItems(a) {
               price_rise: (x, y) => riseShare(y) - riseShare(x),
               newest: (x, y) => (y.first_seen || "").localeCompare(x.first_seen || "") }[a.sort || "best"]);
   // like the grid, one result per product: the first listing of it in this order
-  const seen = new Set();
-  list = list.filter(i => !i.m || !seen.has(i.m) && seen.add(i.m));
+  const seen = new Set(), key = i => i.f || i.m;
+  list = list.filter(i => !key(i) || !seen.has(key(i)) && seen.add(key(i)));
   const limit = Math.min(Math.max(a.limit || 15, 1), 30), top = list.slice(0, limit).map(brief);
   // the same item at other stores, full price included, from the panel's files (fetched once per file)
   await Promise.all(list.slice(0, limit).map(async (i, n) => {
-    if (!i.m || !(i.mn > 1)) return;
-    const info = await productInfo(i.m), offers = info ? info.offers : loadedOffers(i.m);
-    top[n].other_stores = offers.filter(o => o.id !== i.id).map(o => ({ store: o.store_name, price: o.price, currency: o.cur,
+    if (!i.f && !(i.m && i.mn > 1)) return;
+    const info = await productInfo(i.f || i.m) || { colours: [{ offers: loadedOffers(i.m), past: [] }] }, mine = colourOf(info, i);
+    const other = mine.offers.filter(o => o.id !== i.id);
+    if (other.length) top[n].other_stores = other.map(o => ({ store: o.store_name, price: o.price, currency: o.cur,
       usd: o.usd, percent_off: o.off || 0, sizes_in_stock: o.sizes, url: o.url, id: o.id }));
-    if (info && info.past.length) top[n].sold_before = info.past.map(p => ({ store: p.store_name, price: p.price, currency: p.cur, usd: p.usd, last_seen: p.seen }));
+    if (mine.past && mine.past.length) top[n].sold_before = mine.past.map(p => ({ store: p.store_name, price: p.price, currency: p.cur, usd: p.usd, last_seen: p.seen }));
+    const colours = info.colours.filter(c => c !== mine);
+    if (colours.length) top[n].other_colours = colours.map(c => ({ colour: c.label, from_usd: usdOf(c.offers[0]), from_store: c.offers[0].store_name,
+      stores: c.offers.length, id: c.offers[0].id }));
   }));
   return { site_last_updated: DATA.generated, ...(find && find.fixed ? { query_read_as: find.fixed } : {}), total_matches: list.length, showing: Math.min(limit, list.length), items: top };
 }

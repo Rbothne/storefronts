@@ -687,6 +687,14 @@ def usd_rates(previous):
 CATALOG_DIR = os.path.join(ROOT, "data", "catalog")
 BRANDS_DIR = os.path.join(ROOT, "docs", "brands")
 BRAND_FILES = 512
+EVERYTHING_PATH = os.path.join(ROOT, "docs", "everything.json")
+# The page's "Search full price" switch searches the whole catalogue in a background worker, from one file:
+# docs/everything.json, {"stores": [[host, name, currency], ...], "items": [row, ...]}, a row being these fields in
+# this order (unpack() in docs/index.html reads them back). Rows instead of objects, a store's name and currency
+# once, an image without its cache-busting "?v=" and Shopify's file prefix as "~": a third of the size to parse.
+EVERYTHING_FIELDS = ("store", "handle", "title", "brand", "price", "usd", "was", "off", "group", "kind", "type",
+                     "g", "sz", "img", "url", "m", "mn", "f", "fc", "fs")
+SHOPIFY_FILES = "https://cdn.shopify.com/s/files/1/"
 
 
 def brand_key(name):
@@ -733,7 +741,7 @@ def write_brand_files(marks=None):
     for file in sorted(os.listdir(CATALOG_DIR)) if os.path.isdir(CATALOG_DIR) else []:
         for it in load_json(os.path.join(CATALOG_DIR, file), []):
             if marks and it["id"] in marks:
-                it["m"], it["mn"] = marks[it["id"]]
+                it.update(marks[it["id"]])
             name = (it.get("brand") or it["store_name"]).strip()
             key = brand_key(name)
             if key:
@@ -743,28 +751,33 @@ def write_brand_files(marks=None):
     os.makedirs(BRANDS_DIR, exist_ok=True)
     for n, found in enumerate(files):
         write_lines(os.path.join(BRANDS_DIR, f"{n}.json"), found)
+    write_everything([it for found in files for it in found])
     index = [[max(sp, key=sp.get), sum(sp.values())] for sp in names.values()]
     write_lines(os.path.join(BRANDS_DIR, "index.json"), sorted(index, key=lambda row: (-row[1], row[0].lower())))
+
+
+MATCH_FIELDS = ("m", "mn", "f", "fc", "fs")
 
 
 def match_products(items, state, rates, stores):
     """Find the listings that are the same item at different stores (matching.py), across the list and every
     store's catalogue on disk (stores not read this run keep theirs). Marks each matched item on the list with
-    its product (`m`) and how many stores carry it (`mn`), writes docs/matches/, and returns the marks for the
-    brand files. The catalogue files are left without them: they are the build's own input, and the marks are
+    its exact item and design (`m`, `f` and their counts: matching.match), writes docs/matches/, and returns the
+    marks for the brand files. The catalogue files are left without them: they are the build's own input, and the marks are
     worked out afresh every run."""
     t = time.time()
     _, every = matching.load_listings(None, CATALOG_DIR)
     for it in items:
-        it.pop("m", None)
-        it.pop("mn", None)
+        for k in MATCH_FIELDS:
+            it.pop(k, None)
         if it.get("price") is not None:
             every[it["id"]] = it                       # the list's copy wins: it is the one shown
     marks = matching.match(every, state, rates, {h: s.get("name", h) for h, s in stores.items()})
     for it in items:
         if it["id"] in marks:
-            it["m"], it["mn"] = marks[it["id"]]
-    print(f"matched {len({m for m, _ in marks.values()})} products across stores ({len(marks)} listings) "
+            it.update(marks[it["id"]])
+    print(f"matched {len({v['m'] for v in marks.values() if 'm' in v})} items across stores and "
+          f"{len({v['f'] for v in marks.values() if 'f' in v})} designs in several colourways ({len(marks)} listings) "
           f"in {time.time() - t:.0f} s", flush=True)
     return marks
 
@@ -785,6 +798,29 @@ def regroup():
     write_brand_files(marks)
     if data["items"]:
         write_data(path, data)
+
+
+def write_everything(items):
+    """docs/everything.json: every catalogue item, packed (see EVERYTHING_FIELDS)."""
+    stores, rows = {}, []
+    for it in items:
+        host = it["store"]
+        if host not in stores:
+            stores[host] = [len(stores), [host, it.get("store_name", host), it.get("cur", "USD")]]
+        n = stores[host][0]
+        img = re.sub(r"\?v=\d+$", "", it.get("img") or "")
+        if img.startswith(SHOPIFY_FILES):
+            img = "~" + img[len(SHOPIFY_FILES):]
+        handle = it["id"].split("/", 1)[1] if "/" in it["id"] else it["id"]
+        url = it.get("url") if it.get("url") != f"https://{host}/products/{handle}" else None
+        row = [n, handle] + [it.get(k) for k in EVERYTHING_FIELDS[2:13]] + [img or None, url] + \
+              [it.get(k) for k in EVERYTHING_FIELDS[15:]]
+        if it.get("cur", "USD") != stores[host][1][2]:       # a store quoting two currencies: say it per row
+            row.append(it["cur"])
+        while row and row[-1] in (None, 0, [], ""):          # trailing blanks cost bytes and say nothing
+            row.pop()
+        rows.append(row)
+    write_data(EVERYTHING_PATH, {"stores": [v[1] for v in sorted(stores.values())], "items": rows})
 
 
 # ---------------------------------------------------------------- main

@@ -31,6 +31,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 MATCH_DIR = os.path.join(ROOT, "docs", "matches")
 MATCH_FILES = 256          # the page fetches one of these when a comparison opens: bucket() in docs/index.html
 BIG = 12                   # a product at more stores than this is far more likely a shared code than one item
+MODEL_STORES = 30          # ... and a model (every colour of it) at more stores than this, or with more colours
+MODEL_COLOURS = 40         #     than this, is a range code rather than one design
 
 # The maker's style code: 6 or more letters and digits, at least 3 of them digits. Not a measure ("100ml"),
 # a season ("fw2024", "ss25"), a year range, or a long hex string (a file hash, not a code).
@@ -194,6 +196,21 @@ def one_each(ids, info):
     return [x for x in ids if len(per_store[store_of(x)]) == 1]
 
 
+def brand_rows(members, info):
+    """A key's listings by brand: spellings of one brand together ("acne", "acnestudios")."""
+    rows = []                                          # [brand keys, ids]
+    for lid in members:
+        b = info[lid][0]
+        for row in rows:
+            if any(compatible(b, x) for x in row[0]):
+                row[0].add(b)
+                row[1].append(lid)
+                break
+        else:
+            rows.append([{b}, [lid]])
+    return [ids for _, ids in rows]
+
+
 def consistent(members, info, by_colour):
     """Split one key's listings (a code or an image) into the sets that may be one product: by brand, and by
     colour for a code (an image is one colour already). A store with two listings under one key lists two
@@ -202,22 +219,50 @@ def consistent(members, info, by_colour):
     colour separately under one name, at one price, so the picture is what tells them apart). Only sets at two
     or more stores are kept."""
     out = []
-    by_brand = []                                      # [brand keys, ids] for brands compatible with each other
-    for lid in members:
-        b = info[lid][0]
-        for row in by_brand:
-            if any(compatible(b, x) for x in row[0]):
-                row[0].add(b)
-                row[1].append(lid)
-                break
-        else:
-            by_brand.append([{b}, [lid]])
-    for _, ids in by_brand:
+    for ids in brand_rows(members, info):
         for s in colour_parts(ids, info) if by_colour else [ids]:
             s = one_each(s, info)
             if len(s) > 1:
                 out.append(s)
     return out
+
+
+def model_words(it, info_row):
+    """A title's words without its colours and its brand: what stays the same across a design's colourways."""
+    skip = set(re.findall(r"[a-z]+", (it.get("brand") or "").lower()))
+    return {w for w in re.findall(r"[a-z0-9]{3,}", (it.get("title") or "").lower())
+            if w not in skip and w not in COLOURS}
+
+
+def one_design(ids, listings, info):
+    """Can these listings under one code be colourways of one design? At each store that has several of them,
+    their titles (colours left out) must say much the same: a code a shop gives a whole range ("fg9m12" on Fear of
+    God's hoodies, sweatshirts and shorts) puts different names side by side."""
+    by_store = collections.defaultdict(list)
+    for x in ids:
+        by_store[store_of(x)].append(model_words(listings[x], info[x]))
+    for sets in by_store.values():
+        for n, a in enumerate(sets):
+            for b in sets[n + 1:]:
+                if a and b and len(a & b) < 0.6 * min(len(a), len(b)):
+                    return False
+    return True
+
+
+def colour_label(ids, listings, info, others=()):
+    """What to call a colourway: the colours its listings name; else the words of its title that the design's other
+    colourways' titles don't have ("Bold Berry"); else where it is sold. others: those other colourways."""
+    named = collections.Counter(c for x in ids for c in info[x][1])
+    if named:
+        top = max(named.values())
+        return " / ".join(sorted(c.title() for c, n in named.items() if n == top))
+    it = listings[ids[0]]
+    theirs = {w for u in others for x in u for w in re.findall(r"[a-z0-9]+", (listings[x].get("title") or "").lower())}
+    skip = set(re.findall(r"[a-z0-9]+", (it.get("brand") or "").lower())) | {"mens", "womens", "men", "women", "unisex"}
+    own = [w for w in re.findall(r"[A-Za-z0-9]+", it.get("title") or "") if w.lower() not in theirs and w.lower() not in skip]
+    if own and others:
+        return " ".join(own[:4]).title()
+    return "At " + it.get("store_name", store_of(ids[0]))
 
 
 def full_usd(it):
@@ -228,10 +273,16 @@ def full_usd(it):
     return usd * (it.get("was") or price) / price
 
 
+INFO = {}   # listing -> (brand key, colours, what makes it the same listing twice): filled by group()
+
+
 def group(listings):
-    """listings: id -> item (title, brand, url, img, store...). Returns a list of products, each a list of ids at
-    two or more stores, and the codes that identify each one (for finding its past sellers)."""
-    info, by_code, by_image, mixed = {}, collections.defaultdict(list), collections.defaultdict(list), {}
+    """listings: id -> item (title, brand, url, img, store...). Returns (products, models).
+    products: the exact items at two or more stores, each (ids, codes, brand key, colours).
+    models: designs sold in two or more colourways, at two or more stores in all, each (colourways, codes, brand
+    key), a colourway being a list of ids (an exact item, or one store's listing that matched nothing)."""
+    info, by_code, by_image, mixed = INFO, collections.defaultdict(list), collections.defaultdict(list), {}
+    info.clear()
     for lid, it in listings.items():
         b = brand_key(it.get("brand") or it.get("store_name"))
         if not b:
@@ -251,8 +302,9 @@ def group(listings):
         if name:
             by_image[name].append(lid)
 
-    g = Groups()
+    g, fam = Groups(), Groups()                        # exact items; designs (every colour of one)
     keys_of = collections.defaultdict(set)             # listing -> the codes it was joined by
+    fam_keys = collections.defaultdict(set)            # listing -> the codes that put it in a design
     for index, tag in ((by_code, "c"), (by_image, "i")):
         for key, members in index.items():
             if len(members) < 2 or len({store_of(x) for x in members}) < 2:
@@ -265,6 +317,15 @@ def group(listings):
                 if tag == "c":
                     for x in s:
                         keys_of[x].add(key)
+            # The same code over several colours is one design in several colourways: what the exact items keep
+            # apart, a design puts together, as long as each store's listings under it name one design.
+            if tag == "c":
+                for ids in brand_rows(members, info):
+                    if len(ids) > 1 and len({store_of(x) for x in ids}) > 1 and one_design(ids, listings, info):
+                        for x in ids[1:]:
+                            fam.join(ids[0], x)
+                        for x in ids:
+                            fam_keys[x].add(key)
 
     comps = collections.defaultdict(list)
     for lid in g.up:
@@ -285,7 +346,63 @@ def group(listings):
                 continue
             products.append((sorted(p), set().union(*(keys_of[x] for x in p)), info[p[0]][0],
                              frozenset().union(*(info[x][1] for x in p))))
-    return products
+    return designs(products, fam, fam_keys, listings, info)
+
+
+def designs(products, fam, fam_keys, listings, info):
+    """Gather exact items into designs. A design's colourways are its exact items, plus its listings that matched
+    nothing, where listings naming the same colour at different stores are taken as one colourway (the code says
+    one design, the colour one colourway). A design with one colourway is just its item."""
+    for ids, *_ in products:                           # an item's listings are one design, whatever joined them
+        for x in ids[1:]:
+            fam.join(ids[0], x)
+    item_of = {x: n for n, (ids, *_) in enumerate(products) for x in ids}
+    comps = collections.defaultdict(list)
+    for lid in fam.up:
+        comps[fam.find(lid)].append(lid)
+    existing, models, more = {tuple(p[0]) for p in products}, [], []
+    for ids in comps.values():
+        for part in kind_parts(ids, listings):
+            if len({store_of(x) for x in part}) < 2:
+                continue
+            units = {}                                 # colourway key -> ids
+            for x in part:
+                n = item_of.get(x)
+                key = ("item", n) if n is not None else ("colour", info[x][1]) if info[x][1] else ("one", x)
+                units.setdefault(key, []).append(x)
+            # several products naming one colour: one colourway
+            by_colour = collections.defaultdict(list)
+            for key, u in list(units.items()):
+                if key[0] != "one":
+                    c = products[key[1]][3] if key[0] == "item" else key[1]
+                    if c:
+                        by_colour[c].append(key)
+            for c, keys in by_colour.items():
+                if len(keys) > 1:
+                    units[("colour", c)] = [x for k in keys for x in units.pop(k)]
+            colourways = []
+            for key, u in units.items():
+                if key[0] == "colour":                 # a store with two different listings in one colour can't say which
+                    kept = one_each(u, info)
+                    colourways += [[x] for x in u if x not in kept]
+                    u = kept
+                if u:
+                    colourways.append(sorted(u))
+            stores = {store_of(x) for u in colourways for x in u}
+            if len(colourways) < 2 or len(stores) > MODEL_STORES or len(colourways) > MODEL_COLOURS:
+                continue
+            full = sorted(v for v in (full_usd(listings[x]) for u in colourways for x in u) if v)
+            if full and full[-1] > 3 * full[0]:
+                continue
+            models.append((colourways, set().union(*(fam_keys[x] for u in colourways for x in u)), info[part[0]][0]))
+            for u in colourways:
+                if len({store_of(x) for x in u}) > 1 and tuple(u) not in existing:
+                    # a colourway the design brought together across stores: an exact item of its own now
+                    more.append((u, set().union(*(fam_keys[x] for x in u)), info[u[0]][0],
+                                 frozenset().union(*(info[x][1] for x in u))))
+    # exact items: the ones found before, less those a new colourway took in, and the new ones
+    joined = {x for u, *_ in more for x in u}
+    return [p for p in products if not any(x in joined for x in p[0])] + more, models
 
 
 def product_id(ids):
@@ -329,9 +446,13 @@ def past_offers(state, products, current, rates):
             b = brand_key(rec.get("b"))
             if not b:
                 continue
-            hits = {n for c in codes(handle(lid), b) for n, pb, named in by_code.get(c, ())
-                    if compatible(b, pb) and (not named or not colours(handle(lid), rec.get("b")) or colours(handle(lid), rec.get("b")) <= named)}
-            if len(hits) != 1:                         # no product, or a code several products share: not placeable
+            mine = colours(handle(lid), rec.get("b"))
+            hits = {(n, named) for c in codes(handle(lid), b) for n, pb, named in by_code.get(c, ()) if compatible(b, pb)}
+            if len(hits) > 1:                          # a code a design's colourways share: the colour decides
+                hits = {h for h in hits if mine and h[1] and mine <= h[1]}
+            elif hits and mine and next(iter(hits))[1] and not mine <= next(iter(hits))[1]:
+                hits = set()                           # another colour of it
+            if len(hits) != 1:                         # no product, or one the record can't be placed in
                 continue
             h = rec["h"]
             stocked = [p for p in h if p[3]]
@@ -342,36 +463,62 @@ def past_offers(state, products, current, rates):
             after = [p for p in h if p[0] > last[0] and not p[3]]
             seen = (after[0][0] if after else rec.get("x") or last[0])[:10]
             rate = rates.get(cur)
-            out[hits.pop()].append({"store": host, "price": last[1], "cur": cur, "off": last[2] or 0,
+            out[hits.pop()[0]].append({"store": host, "price": last[1], "cur": cur, "off": last[2] or 0,
                                     "usd": round(last[1] / rate, 2) if rate else None, "seen": seen})
     return out
 
 
 def match(listings, state, rates, names):
-    """listings: id -> item, everything listed or in a catalogue this run. Writes docs/matches/ and returns
-    {listing id: [product id, stores carrying it]}, which build.py puts on the listings as `m` and `mn` (the
-    page's "N stores" label needs the count before the panel's file is fetched)."""
-    products = group(listings)
+    """listings: id -> item, everything listed or in a catalogue this run. Writes docs/matches/ and returns, per
+    matched listing, what build.py puts on it: `m` and `mn`, its exact item and how many stores carry that; `f`,
+    `fc` and `fs`, its design, how many colourways that has and how many stores carry any of them (the page's
+    labels need the counts before the panel's file is fetched).
+
+    docs/matches/<n>.json holds, under a design's id (or an exact item's, for one in a single colour),
+    {"colours": [{"m", "label", "img", "offers": [...], "past": [...]}, ...]}: each colourway with every store's
+    offer of it, cheapest first, and the stores that sold it before."""
+    products, models = group(listings)
     past = past_offers(state, products, listings, rates)
+    item_of = {x: n for n, (ids, *_) in enumerate(products) for x in ids}
     files, marks = [{} for _ in range(MATCH_FILES)], {}
-    for n, (ids, _, _, _) in enumerate(products):
-        m = product_id(ids)
+
+    def colourway(ids, others=()):
         offers = {}
         for lid in ids:                                # one offer per store: its cheapest listing of it
             it = listings[lid]
             o = offers.get(it["store"])
             if o is None or (it.get("usd") or it.get("price") or 1e12) < (o.get("usd") or o.get("price") or 1e12):
                 offers[it["store"]] = offer(it, state.get(it["store"], {}).get("products", {}).get(lid))
-        for lid in ids:
-            marks[lid] = [m, len(offers)]
         rows = sorted(offers.values(), key=lambda o: o.get("usd") or o.get("price") or 1e12)
+        n = item_of.get(ids[0])
         hist, before = [], set()
-        for p in sorted(past.get(n, []), key=lambda p: p["seen"], reverse=True):
+        for p in sorted(past.get(n, []) if n is not None else [], key=lambda p: p["seen"], reverse=True):
             if p["store"] not in offers and p["store"] not in before:   # the latest time at each store gone
                 before.add(p["store"])
                 p["store_name"] = names.get(p["store"], p["store"])
                 hist.append(p)
-        files[bucket(m)][m] = {"offers": rows, "past": hist[:12]}
+        out = {"label": colour_label(ids, listings, INFO, others), "img": rows[0].get("img"), "offers": rows, "past": hist[:12]}
+        if n is not None:
+            out["m"] = product_id(products[n][0])
+            for lid in ids:
+                marks.setdefault(lid, {}).update(m=out["m"], mn=len(offers))
+        return out
+
+    in_model = set()
+    for colourways, _, _ in models:
+        f = product_id(["design " + min(x for u in colourways for x in u)])
+        entries = sorted((colourway(u, [v for v in colourways if v is not u]) for u in colourways),
+                         key=lambda c: c["offers"][0].get("usd") or 1e12)
+        stores = len({store_of(x) for u in colourways for x in u})
+        for u in colourways:
+            in_model.update(u)
+            for lid in u:
+                marks.setdefault(lid, {}).update(f=f, fc=len(colourways), fs=stores)
+        files[bucket(f)][f] = {"colours": entries}
+    for ids, *_ in products:
+        if ids[0] not in in_model:
+            entry = colourway(ids)
+            files[bucket(entry["m"])][entry["m"]] = {"colours": [entry]}
     os.makedirs(MATCH_DIR, exist_ok=True)
     for n, found in enumerate(files):
         with open(os.path.join(MATCH_DIR, f"{n}.json"), "w", encoding="utf-8", newline="\n") as f:
@@ -407,15 +554,18 @@ if __name__ == "__main__":
                                    sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, "data", "catalog"))
     import time
     t = time.time()
-    products = group(listings)
+    products, models = group(listings)
     print(f"{len(listings)} listings; {len(products)} products at 2+ stores, {sum(len(p[0]) for p in products)} listings, "
-          f"{time.time() - t:.1f} s")
+          f"{time.time() - t:.1f} s; {len(models)} designs in 2+ colourways, {sum(len(m[0]) for m in models)} colourways")
     sizes = collections.Counter(len({store_of(x) for x in p[0]}) for p in products)
     print("stores per product:", dict(sorted(sizes.items())))
     show = lambda p: [f"{listings[x]['store_name']}: {listings[x]['title'][:60]} ({listings[x].get('cur')} {listings[x].get('price')})" for x in p[0]]
     random.seed(int(sys.argv[3]) if len(sys.argv) > 3 else 1)
     for p in random.sample(products, min(15, len(products))):
         print("\n  " + "\n  ".join(show(p)))
+    print("\nDESIGNS")
+    for cw, _, _ in random.sample(models, min(10, len(models))):
+        print("\n  " + "\n  ".join(f"[{colour_label(u, listings, INFO)}] " + " | ".join(show(([x],))[0] for x in u[:3]) for u in cw[:5]))
     print("\nLARGEST")
     for p in sorted(products, key=lambda p: -len(p[0]))[:5]:
         print("\n  " + "\n  ".join(show(p)))

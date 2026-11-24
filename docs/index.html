@@ -130,10 +130,22 @@
   #compare .offer a { grid-column: 2; grid-row: 2 / span 2; align-self: center; justify-self: end; color: var(--accent); white-space: nowrap; }
   #compare .offer.here { background: var(--chip); margin: 0 -8px; padding: 9px 8px; border-radius: 8px; }
   #compare ul { margin: 4px 0 0; padding-left: 18px; }
+  /* colourways: a row of picture chips, sideways-scrolling on a phone */
+  #compare .swatches { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 8px; margin: 0 -2px; }
+  #compare .swatches button { flex: none; width: 96px; padding: 4px; border: 1px solid var(--line); border-radius: 8px;
+                              background: var(--card); text-align: left; font-size: 11px; line-height: 1.3; }
+  #compare .swatches button[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  #compare .swatches img, #compare .swatches .noimg { display: block; width: 100%; aspect-ratio: 1; object-fit: cover;
+                                                      border-radius: 5px; background: var(--chip); margin-bottom: 3px; }
+  #compare .swatches b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #compare li { margin: 3px 0; }
-  #more { display: block; margin: 18px auto 0; padding: 9px 18px; border-radius: 8px;
+  #more, #fullmore { display: block; margin: 18px auto 0; padding: 9px 18px; border-radius: 8px;
           border: 1px solid var(--line); background: var(--card); }
-  #more[hidden], .filters [hidden] { display: none; }  /* display:block above would otherwise override the hidden attribute */
+  #more[hidden], #fullmore[hidden], #fullsec[hidden], .filters [hidden] { display: none; }
+  /* full-price results, below the sale results */
+  #fullsec { margin-top: 30px; padding-top: 14px; border-top: 1px solid var(--line); }
+  #fullsec h2 { font-size: 16px; margin: 0 0 2px; }
+  #fullsec #fullnote { margin: 0 0 10px; }  /* display:block above would otherwise override the hidden attribute */
   footer { color: var(--muted); font-size: 12px; padding: 0 14px 30px; }
   footer details { margin-top: 6px; }
   footer li.bad { color: var(--sale); }
@@ -225,6 +237,7 @@
     <button class="pill" id="dir" title="Reverse the order"></button>
     <label><input type="checkbox" id="stock"> In stock</label>
     <label><input type="checkbox" id="mysizes"> My sizes</label>
+    <label title="Also search every in-stock full-price item at the tracked stores (a large download, once per visit)"><input type="checkbox" id="fullswitch"> Search full price</label>
     <button class="pill" id="opensettings">Settings</button>
     <button class="pill" id="openchat">Ask the assistant</button>
   </div>
@@ -235,6 +248,12 @@
   <div id="brandbox" class="chips" hidden></div>
   <div class="grid" id="grid"></div>
   <button id="more" hidden>Show more</button>
+  <section id="fullsec" hidden aria-labelledby="fullhead">
+    <h2 id="fullhead"></h2>
+    <p id="fullnote" class="meta"></p>
+    <div class="grid" id="fullgrid"></div>
+    <button id="fullmore" hidden>Show more</button>
+  </section>
 </main>
 <footer id="foot"></footer>
 
@@ -336,6 +355,7 @@ let DATA = { items: [], status: [] }, IDS = new Set(), tab = "wish", shown = PAG
 //   brands     brands you looked up on the "From my brands" tab (key -> name), beside those of followed items
 //   notes      preferences the shopping assistant saved (the API key is stored separately, never in here)
 //   calm       true to hide high-volume stores (see crowd() below)
+//   full       true to search every full-price item too ("Search full price", see FULL below)
 let prefs;
 const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -344,7 +364,7 @@ function loadPrefs(text) {
   const p = JSON.parse(text);
   prefs = { follows: p.follows || {}, itemCats: p.itemCats || {}, kept: p.kept || {}, storeCats: p.storeCats || {},
             hidden: p.hidden || {}, muted: p.muted || {}, gender: p.gender || "", notes: p.notes || [], calm: !!p.calm,
-            changes: p.changes || [], brands: p.brands || {},
+            changes: p.changes || [], brands: p.brands || {}, full: !!p.full,
             sizes: { tops: [], bottoms: [], shoes: [], ...(p.sizes || {}) } };
 }
 function savePrefs() { try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch (e) {} }
@@ -386,8 +406,8 @@ function fill(it) {
   if (i.usd == null && i.cur === "USD") i.usd = i.price;
   return i;
 }
-function loadBrands() {
-  const need = [...new Set([...myBrandKeys()].map(bucket))].filter(n => !LOADED.has(n));
+function loadBrands(also = []) {
+  const need = [...new Set([...myBrandKeys(), ...also].map(bucket))].filter(n => !LOADED.has(n));
   if (!need.length) return;
   for (const n of need) LOADED.set(n, []);                   // asked for: don't fetch it twice
   Promise.all(need.map(n => fetch("brands/" + n + ".json", { cache: "no-cache" })
@@ -734,6 +754,9 @@ const HOME_CUR = (() => {
   return EURO.has(region) ? "EUR" : { US: "USD", GB: "GBP", JP: "JPY", CA: "CAD", AU: "AUD", KR: "KRW", SE: "SEK", DK: "DKK",
     NO: "NOK", CH: "CHF", NZ: "NZD", HK: "HKD", SG: "SGD", CN: "CNY", TW: "TWD" }[region] || "";
 })();
+// What one tile stands for: a design in all its colours, or on the Followed tab, where you star one colour, the
+// exact item.
+const tileKey = (i, where = tab) => (where !== "wish" && i.f) || i.m || null;
 function onePerProduct(list, keys, sort) {
   const d = SORTS[sort].dir, near = (x, y) => sort === "price" ? Math.abs(x - y) <= Math.max(5, 0.03 * Math.min(x, y))
     : typeof x === "number" && Math.abs(x - y) <= TIE;
@@ -745,30 +768,32 @@ function onePerProduct(list, keys, sort) {
     return c ? d * c < 0 : (a.usd ?? a.price ?? 0) < (b.usd ?? b.price ?? 0);
   };
   const best = new Map();
-  for (const i of list) if (i.m && (!best.has(i.m) || better(i, best.get(i.m)))) best.set(i.m, i);
-  return best.size ? list.filter(i => !i.m || best.get(i.m) === i) : list;
+  for (const i of list) { const k = tileKey(i); if (k && (!best.has(k) || better(i, best.get(k)))) best.set(k, i); }
+  return best.size ? list.filter(i => { const k = tileKey(i); return !k || best.get(k) === i; }) : list;
 }
-// How many tiles a list makes: a product at several stores counts once.
-function tileCount(list) {
+// How many tiles a list makes: an item at several stores, or in several colours, counts once.
+function tileCount(list, where = tab) {
   const seen = new Set();
   let n = 0;
-  for (const i of list) if (!i.m) n++; else if (!seen.has(i.m)) { seen.add(i.m); n++; }
+  for (const i of list) { const k = tileKey(i, where); if (!k) n++; else if (!seen.has(k)) { seen.add(k); n++; } }
   return n;
 }
 
 let searchRead = "";   // the search as it was read, when a word of it was taken for a misspelling (shown on the count line)
-function filtered(items, brands) {
-  const find = searcher($("q").value, items), s = $("store").value;
-  searchRead = find ? find.fixed : "";
+// full: the full-price section's items instead of the tab's: { skip: tiles the sale results already show,
+// searched: the items are already the search's (the worker's answer), gender: a word of that search said whose }.
+function filtered(items, brands, full = null) {
+  const find = full && full.searched ? null : searcher($("q").value, items), s = $("store").value;
+  if (!full) searchRead = find ? find.fixed : "";
   const [plo, phi] = priceRange();
   // Everything listed is in stock, so "In stock" only means something on the Followed tab
   const min = +$("minoff").value, stock = tab === "wish" && $("stock").checked, mine = $("mysizes").checked;
-  const gen = find && find.gender || $("gender").value;      // "kids jeans" in the search box outranks the menu
+  const gen = find && find.gender || full && full.gender || $("gender").value;   // "kids jeans" in the search box outranks the menu
   const cat = $("itemcat").value.slice(2);
   const sort = $("sort").value, menus = storeMenus();
   let list = items.filter(i =>
     (!find || find.has(i)) &&                                // first: a search rules out most items, and cheaply
-    inTab(i, tab, brands, menus) &&
+    (full ? !IDS.has(i.id) && storeShown(i, menus) && !full.skip.has(tileKey(i)) : inTab(i, tab, brands, menus)) &&
     // the two price-history sorts list only items whose price actually fell while tracked
     (sort !== "drop" || (dropped(i) || rose(i)) && !i.storewide) &&
     (!picked.size || picked.has(leafOf(i))) && (!s || i.store === s) &&
@@ -931,7 +956,7 @@ function spark(i) {
 
 function card(i) {
   const c = el("div", "card"), a = el("a"); a.href = i.url; a.target = "_blank"; a.rel = "noopener noreferrer";
-  const several = i.m && i.mn > 1;
+  const several = !!(i.f || (i.m && i.mn > 1));
   // sold at several stores: a click opens every store's price; a middle or modified click still opens this store
   if (several) a.onclick = e => { if (e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); compare(i); };
   const pic = el("div", "pic");
@@ -958,8 +983,8 @@ function card(i) {
     b.append(p);
   }
   if (several) {
-    const n = el("div", "stores", i.mn + " stores");
-    n.title = "Sold at " + i.mn + " stores: click to compare their prices"; b.append(n);
+    const stores = i.f ? i.fs : i.mn, n = el("div", "stores", (i.f ? i.fc + " colours" + (stores > 1 ? " · " : "") : "") + (stores > 1 ? stores + " stores" : ""));
+    n.title = (i.f ? "In " + i.fc + " colours" : "Sold") + (stores > 1 ? " at " + stores + " stores" : "") + ": click to compare prices"; b.append(n);
   }
   if (i.hist && i.price != null) b.append(spark(i));
   const notes = [];
@@ -986,68 +1011,96 @@ function card(i) {
   return c;
 }
 
-// ---- the comparison panel. matches/<n>.json holds, per product, every store's offer (cheapest first, in US dollars,
-// full-price listings included) and the stores that sold it before; the file is fetched when a panel first needs it.
-// matchFile() must match bucket() in matching.py.
-const MATCH_FILES = 256, MATCHES = new Map();               // file number -> a promise of {product id: {offers, past}}
+// ---- the comparison panel. matches/<n>.json holds, under a design's id (or an exact item's), its colourways, each
+// with every store's offer (cheapest first, in US dollars, full-price listings included) and the stores that sold it
+// before; the file is fetched when a panel first needs it. matchFile() must match bucket() in matching.py.
+const MATCH_FILES = 256, MATCHES = new Map();               // file number -> a promise of {id: {colours}}
 const matchFile = m => { let n = 0; for (const c of m) n = (n * 31 + c.charCodeAt(0)) % MATCH_FILES; return n; };
-function productInfo(m) {
-  const n = matchFile(m);
+function productInfo(key) {
+  const n = matchFile(key);
   if (!MATCHES.has(n)) MATCHES.set(n, fetch("matches/" + n + ".json", { cache: "no-cache" })
     .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .catch(() => { MATCHES.delete(n); return {}; }));     // try again next time
-  return MATCHES.get(n).then(f => f[m] || null);
+  return MATCHES.get(n).then(f => f[key] || null);
 }
-// What the page itself holds of a product, should its file not come: the listings loaded with the same id.
-const loadedOffers = m => pool().filter(i => i.m === m && i.price != null && !i.gone)
+// What the page itself holds of an exact item, should its file not come: the listings loaded with the same id.
+const loadedOffers = m => !m ? [] : pool().filter(i => i.m === m && i.price != null && !i.gone)
   .sort((a, b) => (a.usd ?? a.price) - (b.usd ?? b.price));
+// The colourway a listing is in.
+const colourOf = (info, i) => info.colours.find(c => c.offers.some(o => o.id === i.id)) || info.colours.find(c => i.m && c.m === i.m) || info.colours[0];
 const monthOf = d => new Date(d + "T12:00:00Z").toLocaleDateString(undefined,
   { month: "long", ...(d.slice(0, 4) !== TODAY.slice(0, 4) ? { year: "numeric" } : {}) });
+const usdOf = o => o.usd ?? (o.cur === "USD" ? o.price : null);
+const bestPrice = o => usdOf(o) != null ? money(Math.round(usdOf(o)), "USD") : money(o.price, o.cur);
 function compare(i) {
   const box = $("comparebody"), dlg = $("compare");
   box.replaceChildren(el("h2", null, i.title), el("p", null, "Looking up every store's price…"));
   dlg.showModal();
-  productInfo(i.m).then(info => {
+  productInfo(i.f || i.m).then(found => {
     if (!dlg.open) return;
-    const offers = info ? info.offers : loadedOffers(i.m);
-    if (offers.length < 2) { dlg.close(); window.open(i.url, "_blank", "noopener"); return; }
-    const rows = offers.map(o => {
-      const row = el("div", "offer" + (o.id === i.id ? " here" : "")), who = el("div", "who", o.store_name);
-      if (o.id === i.id) who.append(el("span", null, " · this listing"));
-      const cost = el("div", "cost"), usd = o.usd ?? (o.cur === "USD" ? o.price : null);
-      cost.append(el("span", o.off ? "sale" : null, usd != null ? money(Math.round(usd), "USD") : money(o.price, o.cur)));
-      if (usd != null && o.cur !== "USD") cost.append(el("span", "meta", " " + money(o.price, o.cur)));
-      const facts = [o.off ? o.off + "% off" : "Full price"];
-      if (o.avail === false) facts.push("Sold out");
-      facts.push(o.sizes && o.sizes.length ? "Sizes: " + o.sizes.join(", ") : "Sizes not listed");
-      const a = el("a", null, "Open ↗"); a.href = o.url; a.target = "_blank"; a.rel = "noopener noreferrer";
-      a.setAttribute("aria-label", "Open at " + o.store_name);
-      row.append(who, cost, el("div", "meta", facts.join(" · ")), a);
-      if (o.title !== i.title) row.append(el("div", "meta", o.title));
-      return row;
-    });
-    // history: the stores that sold it before, and the lowest a store still selling it has asked
-    const was = [...(info ? info.past : []).map(p => [p.seen, p.store_name + " had it for " +
-                   (p.usd != null ? money(Math.round(p.usd), "USD") : money(p.price, p.cur)) + (p.off ? " (" + p.off + "% off)" : "") + " in " + monthOf(p.seen)]),
-                 ...offers.filter(o => o.low).map(o => [o.low[1], o.store_name + " had it for " +
-                   (o.usd != null ? money(Math.round(o.usd * o.low[0] / o.price), "USD") : money(o.low[0], o.cur)) + " on " + shortDay(o.low[1])])]
-      .sort((x, y) => y[0].localeCompare(x[0]));
-    const parts = [el("h2", null, i.title),
-      el("p", null, "At " + offers.length + " stores, cheapest first. Prices compared in US dollars at today's rates; " +
-                    "shipping and duties are not included."), ...rows];
-    if (was.length) {
-      const ul = el("ul");
-      ul.append(...was.map(([, text]) => el("li", null, text)));
-      parts.push(el("h3", null, "Price history"), ul);
-    }
-    box.replaceChildren(...parts);
+    const info = found || { colours: [{ label: "", offers: loadedOffers(i.m), past: [] }] };
+    if (info.colours.length < 2 && info.colours[0].offers.length < 2) { dlg.close(); window.open(i.url, "_blank", "noopener"); return; }
+    let pick = colourOf(info, i);
+    const draw = () => {
+      const parts = [el("h2", null, i.title)];
+      if (info.colours.length > 1) {                         // the colourways, each at its best price; pick one to see its stores
+        const row = el("div", "swatches");
+        row.append(...info.colours.map(c => {
+          const b = el("button"), stores = c.offers.length;
+          b.setAttribute("aria-pressed", c === pick);
+          if (c.img) { const im = el("img"); im.src = thumb(c.img); im.alt = ""; im.loading = "lazy"; im.referrerPolicy = "no-referrer"; b.append(im); }
+          else b.append(el("span", "noimg"));
+          b.append(el("b", null, c.label || "Colour"), "from " + bestPrice(c.offers[0]) + (stores > 1 ? " · " + stores + " stores" : ""));
+          b.title = (c.label || "This colour") + ": from " + bestPrice(c.offers[0]) + " at " + c.offers[0].store_name;
+          b.onclick = () => { pick = c; draw(); };
+          return b;
+        }));
+        parts.push(el("h3", null, "In " + info.colours.length + " colours"), row);
+      }
+      const offers = pick.offers;
+      parts.push(el("h3", null, (info.colours.length > 1 ? (pick.label || "This colour") + ": " : "") +
+                                (offers.length > 1 ? offers.length + " stores, cheapest first" : "1 store")),
+                 el("p", null, "Prices compared in US dollars at today's rates; shipping and duties are not included."));
+      for (const o of offers) {
+        const row = el("div", "offer" + (o.id === i.id ? " here" : "")), who = el("div", "who", o.store_name);
+        if (o.id === i.id) who.append(el("span", null, " · this listing"));
+        const cost = el("div", "cost");
+        cost.append(el("span", o.off ? "sale" : null, bestPrice(o)));
+        if (usdOf(o) != null && o.cur !== "USD") cost.append(el("span", "meta", " " + money(o.price, o.cur)));
+        const facts = [o.off ? o.off + "% off" : "Full price"];
+        if (o.avail === false) facts.push("Sold out");
+        facts.push(o.sizes && o.sizes.length ? "Sizes: " + o.sizes.join(", ") : "Sizes not listed");
+        const a = el("a", null, "Open ↗"); a.href = o.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+        a.setAttribute("aria-label", "Open at " + o.store_name);
+        row.append(who, cost, el("div", "meta", facts.join(" · ")), a);
+        if (o.title !== i.title) row.append(el("div", "meta", o.title));
+        parts.push(row);
+      }
+      // history: the stores that sold this colour before, and the lowest a store still selling it has asked
+      const was = [...(pick.past || []).map(p => [p.seen, p.store_name + " had it for " +
+                     (p.usd != null ? money(Math.round(p.usd), "USD") : money(p.price, p.cur)) + (p.off ? " (" + p.off + "% off)" : "") + " in " + monthOf(p.seen)]),
+                   ...offers.filter(o => o.low).map(o => [o.low[1], o.store_name + " had it for " +
+                     (usdOf(o) != null ? money(Math.round(usdOf(o) * o.low[0] / o.price), "USD") : money(o.low[0], o.cur)) + " on " + shortDay(o.low[1])])]
+        .sort((x, y) => y[0].localeCompare(x[0]));
+      if (was.length) {
+        const ul = el("ul");
+        ul.append(...was.map(([, text]) => el("li", null, text)));
+        parts.push(el("h3", null, "Price history"), ul);
+      }
+      const keep = box.querySelector(".swatches")?.scrollLeft;
+      box.replaceChildren(...parts);
+      const row = box.querySelector(".swatches"), on = row && row.querySelector('[aria-pressed="true"]');
+      // the picked colour in view: where the row was after a click, scrolled to it when the panel opens
+      if (row) row.scrollLeft = keep ?? Math.max(0, on.offsetLeft - row.offsetLeft - 8);
+    };
+    draw();
   });
 }
 
 function counts(items, brands = followedBrands(items)) {
   const m = storeMenus();
   for (const btn of $("tabs").children) {
-    btn.lastChild.textContent = tileCount(items.filter(i => inTab(i, btn.dataset.tab, brands, m)));
+    btn.lastChild.textContent = tileCount(items.filter(i => inTab(i, btn.dataset.tab, brands, m)), btn.dataset.tab);
     btn.setAttribute("aria-pressed", btn.dataset.tab === tab);
   }
 }
@@ -1092,11 +1145,149 @@ function render(typed = false) {
   $("more").textContent = "Show more (" + (list.length - shown) + " left)";
   if (!typed) counts(items, brands);
   $("stock").parentNode.hidden = tab !== "wish";
+  LAST = { list, brands };
+  drawFull();
 }
 function reset() { shown = PAGE; render(); }
 // The search redraws once typing pauses, not on every key: a redraw goes through every listed item.
 let typing = 0;
-function searchTyped() { clearTimeout(typing); typing = setTimeout(() => { shown = PAGE; render(true); }, 150); }
+function searchTyped() { clearTimeout(typing); typing = setTimeout(() => { shown = PAGE; fullShown = PAGE; render(true); }, 150); }
+
+// ---- full price. The list holds sale items; a search on Everything also looks through what the stores sell at full
+// price, shown below the sale results. A search that names a brand ("jacquemus shirt", "acne jeans") fetches that
+// brand's file (brands/<n>.json, tens of KB). "Search full price" goes further: every in-stock item at every store,
+// from everything.json (packed by write_everything() in build.py), searched in a background worker that runs the
+// page's own search code, so typos, "jeans" and "womens" read the same as above. A tile the sale results already show
+// is left out (its panel lists the full-price stores), and the section counts tiles like the grid.
+let LAST = { list: [], brands: new Map() }, fullShown = PAGE;
+const FULL = { worker: null, ready: false, failed: false, stores: null, seq: 0, asked: "", answered: "", hits: [], total: 0, gender: "", fixed: "" };
+const FULL_CAP = 20000;                                      // hits handed back per search; beyond that the count says "+"
+// Brands a search names: a run of its words spelled as a brand ("acne studios"), a word that only one brand's titles
+// use as its first word ("acne"), or a near miss of a brand's name in a long word ("jacqemus"). Words many brands use
+// ("linen", "black") name none.
+let BRAND_WORDS = null, BRAND_ASKED = false;
+function brandWords() {
+  if (BRAND_WORDS) return BRAND_WORDS;
+  const spread = new Map();                                  // word -> the brands whose titles use it (up to 30)
+  for (const i of DATA.items) {
+    const b = brandKey(i.brand);
+    for (const w of new Set(plain(i.title).split(/[^a-z0-9]+/))) {
+      if (w.length < 3) continue;
+      const set = spread.get(w) || spread.set(w, new Set()).get(w);
+      if (set.size < 30) set.add(b);
+    }
+  }
+  const full = new Map(), first = new Map();
+  for (const b of BRAND_INDEX) {
+    full.set(b.key, b);
+    const w = brandKey(plain(b.name).split(/\s+/)[0]);
+    if (w.length >= 4 && w !== b.key) (first.get(w) || first.set(w, []).get(w)).push(b);
+  }
+  return BRAND_WORDS = { full, first, common: w => (spread.get(w) || { size: 0 }).size >= 30 };
+}
+function namedBrands(text) {
+  if (!BRAND_INDEX) { if (!BRAND_ASKED) { BRAND_ASKED = true; brandIndex().then(() => render(true)); } return []; }
+  const { full, first, common } = brandWords(), words = plain(text).split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, "")).filter(Boolean);
+  const found = new Map(), used = new Set();
+  for (let a = 0; a < words.length; a++) for (let b = Math.min(words.length, a + 3); b > a; b--) {
+    const hit = full.get(words.slice(a, b).join(""));
+    if (hit && !(b - a === 1 && common(words[a]))) { found.set(hit.key, hit); for (let n = a; n < b; n++) used.add(n); break; }
+  }
+  words.forEach((w, n) => {
+    if (used.has(n) || w.length < 4 || common(w) || WHOSE[w] || FILLER.has(w)) return;
+    const firsts = (first.get(w) || []).slice().sort((x, y) => y.n - x.n).slice(0, 2);
+    if (firsts.length) { for (const b of firsts) found.set(b.key, b); return; }
+    if (w.length >= 6 && !/\d/.test(w)) {                    // a slip in a long brand name
+      let best = null;
+      for (const b of BRAND_INDEX) if (b.key[0] === w[0] && b.n >= 5) {
+        const near = nearStart(w, b.key, w.length >= 8 ? 2 : 1);
+        if (near && near.whole && (!best || b.n > best.n)) best = b;
+      }
+      if (best) found.set(best.key, best);
+    }
+  });
+  return [...found.values()];
+}
+// The worker: the page's search block, and a loop that answers searches over everything.json.
+function fullWorker() {
+  let ROWS = null, ITEMS = null;
+  onmessage = async e => {
+    const d = e.data;
+    if (d.url) {
+      try {
+        const r = await fetch(d.url, { cache: "no-cache" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const data = await r.json();
+        ROWS = data.items;
+        // what the search reads of an item, as the page's items carry it
+        ITEMS = ROWS.map(r => ({ title: r[2] || "", brand: r[3] || "", store_name: data.stores[r[0]][1], group: r[8], kind: r[9], type: r[10] }));
+        postMessage({ ready: ROWS.length, stores: data.stores });
+      } catch (err) { postMessage({ failed: String(err) }); }
+      return;
+    }
+    const find = searcher(d.q, ITEMS), hits = [];
+    let total = 0;
+    if (find) for (let n = 0; n < ITEMS.length; n++) if (find.has(ITEMS[n]) && ++total <= d.cap) hits.push(ROWS[n]);
+    postMessage({ seq: d.seq, q: d.q, gender: find ? find.gender : "", fixed: find ? find.fixed : "", total, hits });
+  };
+}
+function startWorker() {
+  if (FULL.worker || FULL.failed) return;
+  const page = [...document.scripts].map(x => x.textContent).find(t => t.includes("// ---- end of search")) || "";
+  const block = page.slice(page.indexOf("// ---- search."), page.indexOf("// ---- end of search"));
+  try { FULL.worker = new Worker(URL.createObjectURL(new Blob([block + "\n(" + fullWorker + ")();"], { type: "text/javascript" }))); }
+  catch (e) { FULL.failed = true; return; }
+  FULL.worker.onmessage = e => {
+    const d = e.data;
+    if (d.failed) { FULL.failed = true; drawFull(); return; }
+    if (d.ready) { FULL.ready = true; FULL.stores = d.stores; FULL.count = d.ready; drawFull(); return; }
+    if (d.seq !== FULL.seq) return;                          // a search since typed over
+    Object.assign(FULL, { answered: d.q, total: d.total, gender: d.gender, fixed: d.fixed, hits: d.hits.map(unpack) });
+    drawFull();
+  };
+  FULL.worker.postMessage({ url: new URL("everything.json", location.href).href });
+}
+const SHOPIFY_FILES = "https://cdn.shopify.com/s/files/1/";
+function unpack(r) {                                         // a row of everything.json as an item (EVERYTHING_FIELDS)
+  const [host, name, cur] = FULL.stores[r[0]], img = r[13];
+  return fill({ id: host + "/" + r[1], store: host, store_name: name, title: r[2] || "", brand: r[3], price: r[4], usd: r[5],
+    was: r[6], off: r[7] || 0, group: r[8], kind: r[9], type: r[10], g: r[11], sz: r[12],
+    img: img && img[0] === "~" ? SHOPIFY_FILES + img.slice(1) : img, url: r[14], m: r[15], mn: r[16], f: r[17], fc: r[18], fs: r[19], cur: r[20] || cur });
+}
+function drawFull() {
+  const sec = $("fullsec"), q = $("q").value.trim(), note = $("fullnote");
+  if (tab !== "all" || !q) { sec.hidden = true; return; }
+  let items, head, searched = false, extra = "";
+  if (prefs.full && !FULL.failed) {
+    startWorker();
+    if (!FULL.ready) {
+      sec.hidden = false; $("fullhead").textContent = "Full price at tracked stores";
+      note.textContent = "Loading every in-stock full-price item, once per visit…";
+      $("fullgrid").replaceChildren(); $("fullmore").hidden = true; return;
+    }
+    if (FULL.asked !== q) { FULL.asked = q; FULL.worker.postMessage({ q, cap: FULL_CAP, seq: ++FULL.seq }); }
+    if (FULL.answered !== q) return;                         // its answer is on its way: keep what is shown
+    items = FULL.hits; searched = true; head = "Full price at tracked stores";
+    if (FULL.fixed) extra = "Showing results for “" + FULL.fixed + "”. ";
+    if (FULL.total > FULL_CAP) extra += "The first " + FULL_CAP.toLocaleString() + " of " + FULL.total.toLocaleString() + " matches are filtered here. ";
+  } else {
+    const named = namedBrands(q);
+    if (!named.length) { sec.hidden = true; return; }
+    loadBrands(named.map(b => b.key));
+    const keys = new Set(named.map(b => b.key));
+    items = named.flatMap(b => (LOADED.get(bucket(b.key)) || []).filter(i => keys.has(brandOf(i))));
+    head = "Full price from " + named.map(b => b.name).join(", ");
+    if (!named.every(b => ARRIVED.has(bucket(b.key)))) extra = "Loading… ";
+    extra += prefs.full ? "" : "Tick “Search full price” to search every brand. ";
+  }
+  const list = filtered(items, LAST.brands, { skip: new Set(LAST.list.map(i => tileKey(i)).filter(Boolean)), searched, gender: searched ? FULL.gender : "" });
+  sec.hidden = !list.length && !extra;
+  $("fullhead").textContent = head + " (" + list.length.toLocaleString() + ")";
+  note.textContent = extra + "In stock and not on sale (or under " + (DATA.min_discount || 0) + "% off), so not in the list above.";
+  $("fullgrid").replaceChildren(...list.slice(0, fullShown).map(card));
+  $("fullmore").hidden = list.length <= fullShown;
+  $("fullmore").textContent = "Show more (" + (list.length - fullShown) + " left)";
+}
 
 // The range in words, for the assistant's view of the screen.
 const priceWords = ([lo, hi]) =>
@@ -1312,6 +1503,9 @@ function setup() {
   $("gender").value = prefs.gender;                           // remembered between visits
   $("gender").addEventListener("input", () => { prefs.gender = $("gender").value; savePrefs(); reset(); });
   $("more").onclick = () => { shown += PAGE; render(); };
+  $("fullmore").onclick = () => { fullShown += PAGE; drawFull(); };
+  $("fullswitch").checked = prefs.full;
+  $("fullswitch").addEventListener("input", () => { prefs.full = $("fullswitch").checked; savePrefs(); fullShown = PAGE; drawFull(); });
 
   $("opensettings").onclick = () => { drawSettings(); $("settings").showModal(); };
   $("closesettings").onclick = () => $("settings").close();
