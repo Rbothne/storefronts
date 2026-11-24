@@ -11,6 +11,7 @@ Writes  docs/data.json     (what the page shows)
 Shopify stores are read here; stores that are not open Shopify feeds are read by listings.py.
 Standard library only.  Run:  python3 build.py
 """
+import collections
 import concurrent.futures
 import datetime
 import gzip
@@ -18,6 +19,7 @@ import html as htmllib
 import json
 import os
 import re
+import statistics
 import sys
 import threading
 import time
@@ -847,13 +849,16 @@ def write_catalog(catalog, stores):
             os.remove(os.path.join(CATALOG_DIR, file))
 
 
-def write_brand_files(marks=None):
+def write_brand_files(marks=None, listed=()):
     """Regroup every store's catalogue by brand into docs/brands/, with an index of the brands for the page's
     brand lookup: index.json lists [name, items] for each brand, biggest first, under its most common spelling.
-    marks: the product each matched listing belongs to (see match_products)."""
+    marks: the product each matched listing belongs to (see match_products); listed: catalogue items that went on
+    the list after all (cheaper than at another store), left out here so the page doesn't show them twice."""
     files, names = [[] for _ in range(BRAND_FILES)], {}
     for file in sorted(os.listdir(CATALOG_DIR)) if os.path.isdir(CATALOG_DIR) else []:
         for it in load_json(os.path.join(CATALOG_DIR, file), []):
+            if it["id"] in listed:
+                continue
             if marks and it["id"] in marks:
                 it.update(marks[it["id"]])
             name = (it.get("brand") or it["store_name"]).strip()
@@ -874,12 +879,13 @@ MATCH_FIELDS = ("m", "mn", "f", "fc", "fs")
 PHOTOS_PER_RUN = 6000      # new photos read per build for matching (about 3 minutes); the rest wait for the next run
 
 
-def match_products(items, state, rates, stores):
+def match_products(items, state, rates, stores, min_off):
     """Find the listings that are the same item at different stores (matching.py), across the list and every
     store's catalogue on disk (stores not read this run keep theirs). Marks each matched item on the list with
     its exact item and design (`m`, `f` and their counts: matching.match), writes docs/matches/, and returns the
-    marks for the brand files. The catalogue files are left without them: they are the build's own input, and the marks are
-    worked out afresh every run."""
+    marks for the brand files, and the catalogue items much cheaper than at another store, priced as deals for the
+    list (cheaper_elsewhere). The catalogue files are left without them: they are the build's own input, and the
+    marks and those deals are worked out afresh every run, so `items` should not hold last run's deals."""
     t = time.time()
     _, every = matching.load_listings(None, CATALOG_DIR)
     for it in items:
@@ -896,13 +902,56 @@ def match_products(items, state, rates, stores):
 
     marks = matching.match(every, state, rates, {h: s.get("name", h) for h, s in stores.items()}, look)
     imagesig.save_cache(cache)
-    for it in items:
+    deals = cheaper_elsewhere(every, marks, {it["id"] for it in items}, min_off)
+    for it in items + deals:
         if it["id"] in marks:
             it.update(marks[it["id"]])
     print(f"matched {len({v['m'] for v in marks.values() if 'm' in v})} items across stores and "
           f"{len({v['f'] for v in marks.values() if 'f' in v})} designs in several colourways ({len(marks)} listings) "
-          f"in {time.time() - t:.0f} s ({read[0]} photos read)", flush=True)
-    return marks
+          f"in {time.time() - t:.0f} s ({read[0]} photos read); {len(deals)} full-price items much cheaper than "
+          f"at another store", flush=True)
+    return marks, deals
+
+
+# A full-price listing is a deal when the same item costs much more at another store: list it as if on sale, its
+# "was" price being what the other stores ask (the median of their in-stock prices, in dollars). Prices quoted in
+# different currencies carry VAT, duty and regional pricing the dollar figure can't see, so those need a wider gap;
+# a gap over ELSEWHERE_MAX is more likely two different items than a bargain.
+ELSEWHERE_CURRENCY = 10    # extra points when the other stores quote another currency
+ELSEWHERE_MAX = 75
+
+
+def cheaper_elsewhere(every, marks, listed, min_off):
+    """Listings not on the list that are at least min_off under the same item at the other stores that stock it.
+    every: id -> listing (the list and every catalogue); marks: matching's `m` per listing; listed: ids on the
+    list. -> copies of those listings, priced as deals: `was` and `off` against the others, `vs` = [store, $]."""
+    by_item = collections.defaultdict(dict)
+    for lid, mark in marks.items():
+        it = every.get(lid)
+        if not it or "m" not in mark or it.get("usd") is None or it.get("avail") is False:
+            continue
+        cheapest = by_item[mark["m"]].get(it["store"])
+        if cheapest is None or it["usd"] < cheapest["usd"]:      # a store's cheapest listing of it speaks for it
+            by_item[mark["m"]][it["store"]] = it
+    out = []
+    for offers in by_item.values():
+        if len(offers) < 2:
+            continue
+        for it in offers.values():
+            if it["id"] in listed or (it.get("off") or 0) >= min_off or not it.get("price"):
+                continue
+            others = [o for o in offers.values() if o is not it]
+            ref = statistics.median(o["usd"] for o in others)
+            gap = round((ref - it["usd"]) / ref * 100)
+            need = min_off + (ELSEWHERE_CURRENCY if any(o.get("cur") != it.get("cur") for o in others) else 0)
+            if not need <= gap <= ELSEWHERE_MAX:
+                continue
+            near = min(others, key=lambda o: abs(o["usd"] - ref))
+            deal = {k: v for k, v in it.items() if k not in ("tracked_drop", "storewide", "pre")}
+            deal.update(was=round(ref * it["price"] / it["usd"], 2), off=gap, avail=True, tags=["elsewhere"],
+                        vs=[near.get("store_name", near["store"]), round(ref, 2)])
+            out.append(deal)
+    return out
 
 
 def write_data(path, data):
@@ -917,9 +966,12 @@ def regroup():
     data = load_json(path, {"items": []})
     cfg = load_json(os.path.join(ROOT, "stores.json"), {"stores": []})
     rates = {**FALLBACK_RATES, **(data.get("rates") or {})}
-    marks = match_products(data["items"], history.load_state(), rates, {s["host"]: s for s in cfg["stores"]})
-    write_brand_files(marks)
+    data["items"] = [it for it in data["items"] if it.get("tags") != ["elsewhere"]]   # worked out again below
+    marks, deals = match_products(data["items"], history.load_state(), rates, {s["host"]: s for s in cfg["stores"]},
+                                  data.get("min_discount", 20))
+    write_brand_files(marks, {it["id"] for it in deals})
     if data["items"]:
+        data["items"] = sorted(data["items"] + deals, key=lambda i: (-i["off"], i["store"], i["title"]))
         write_data(path, data)
 
 
@@ -1265,7 +1317,12 @@ def main():
         del state[host]
     history.save_state(state)
     write_catalog(catalog, stores)
-    write_brand_files(match_products(list(items.values()), state, rates, stores))
+    # last run's deals at other stores' prices, carried with a store not read this run, are worked out again
+    for lid in [lid for lid, it in items.items() if it.get("tags") == ["elsewhere"]]:
+        del items[lid]
+    marks, deals = match_products(list(items.values()), state, rates, stores, min_off)
+    write_brand_files(marks, {it["id"] for it in deals})
+    items.update((it["id"], it) for it in deals)
     # a line about this run for the metrics page: the only place its speed and its refusals can be seen from outside
     run = {"t": T, "every_store": stalest is None, "stores": sum(1 for h in hosts if stores[h]["platform"] != "link"),
            "minutes": round((time.time() - began) / 60, 1), "requests": COUNT["requests"], "refused": COUNT["refused"],

@@ -93,7 +93,8 @@
   .pic img { object-fit: cover; display: block; margin: -8px; width: calc(100% + 16px); height: calc(100% + 16px); max-width: none; }
   .off { position: absolute; top: 8px; left: 8px; background: var(--sale); color: #fff; font-weight: 700;
          padding: 2px 7px; border-radius: 6px; font-size: 12px; }
-  .off.tracked { background: var(--accent); color: var(--bg); }   /* no "was" price from the store: measured from the price tracked here */
+  .off.tracked { background: var(--accent); color: var(--bg); }
+  .off.elsewhere { background: var(--accent); color: var(--bg); }   /* full price here, under the same item at other stores */   /* no "was" price from the store: measured from the price tracked here */
   .new { position: absolute; top: 8px; right: 46px; background: var(--accent); color: var(--bg); font-weight: 600;
          padding: 2px 7px; border-radius: 6px; font-size: 11px; }
   .star { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; border-radius: 50%; padding: 0;
@@ -139,9 +140,9 @@
                                                       border-radius: 5px; background: var(--chip); margin-bottom: 3px; }
   #compare .swatches b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #compare li { margin: 3px 0; }
-  #more, #fullmore { display: block; margin: 18px auto 0; padding: 9px 18px; border-radius: 8px;
+  #more, #fullmore, #fullbrowse { display: block; margin: 18px auto 0; padding: 9px 18px; border-radius: 8px;
           border: 1px solid var(--line); background: var(--card); }
-  #more[hidden], #fullmore[hidden], #fullsec[hidden], .filters [hidden] { display: none; }
+  #more[hidden], #fullmore[hidden], #fullbrowse[hidden], #fullsec[hidden], .filters [hidden] { display: none; }
   /* full-price results, below the sale results */
   #fullsec { margin-top: 30px; padding-top: 14px; border-top: 1px solid var(--line); }
   #fullsec h2 { font-size: 16px; margin: 0 0 2px; }
@@ -250,6 +251,7 @@
   <section id="fullsec" hidden aria-labelledby="fullhead">
     <h2 id="fullhead"></h2>
     <p id="fullnote" class="meta"></p>
+    <button id="fullbrowse" hidden>Show every full-price item</button>
     <div class="grid" id="fullgrid"></div>
     <button id="fullmore" hidden>Show more</button>
   </section>
@@ -506,7 +508,7 @@ const SHRINK = 10, TIE = 2;
 let REL = { store: new Map(), brand: new Map() };
 function relStats() {
   const r = { store: new Map(), brand: new Map() }, add = (m, k, v) => k && (m.get(k) || m.set(k, []).get(k)).push(v);
-  for (const i of DATA.items) if (i.off > 0) { add(r.store, i.store, i.off); add(r.brand, brandKey(i.brand), i.off); }
+  for (const i of DATA.items) if (i.off > 0 && !i.vs) { add(r.store, i.store, i.off); add(r.brand, brandKey(i.brand), i.off); }
   for (const m of Object.values(r)) for (const a of m.values()) a.sort((x, y) => x - y);
   return r;
 }
@@ -514,7 +516,7 @@ const countBelow = (a, x, orEqual) => { let lo = 0, hi = a.length;     // binary
   while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] < x || (orEqual && a[m] === x)) lo = m + 1; else hi = m; } return lo; };
 // { n, median, beats: raw share it beats, score: shrunk 0..1 } for the item's store or brand; null with no markdown.
 function standing(i, kind) {
-  const a = i.off > 0 && REL[kind].get(kind === "store" ? i.store : brandKey(i.brand));
+  const a = i.off > 0 && !i.vs && REL[kind].get(kind === "store" ? i.store : brandKey(i.brand));
   if (!a) return null;
   const below = countBelow(a, i.off - TIE), ties = countBelow(a, i.off + TIE, true) - below, n = a.length;
   return { n, median: a[n >> 1], beats: (below + ties / 2) / n, score: (below + ties / 2 + SHRINK / 2) / (n + SHRINK) };
@@ -972,8 +974,11 @@ function card(i) {
   } else pic.textContent = i.link_only ? "Open listing" : "No image";
   a.append(pic);
   if (i.off) {
-    const o = el("span", "off" + (i.tracked_drop ? " tracked" : ""), (i.tracked_drop ? "↓ " : "-") + i.off + "%" + (i.tracked_drop ? " tracked" : ""));
-    o.title = i.tracked_drop ? "The store shows no original price. This is " + i.off + "% under the highest price tracked here." : offNote(i);
+    const o = el("span", "off" + (i.tracked_drop ? " tracked" : i.vs ? " elsewhere" : ""),
+                 (i.tracked_drop ? "↓ " : "-") + i.off + "%" + (i.tracked_drop ? " tracked" : i.vs ? " vs elsewhere" : ""));
+    o.title = i.tracked_drop ? "The store shows no original price. This is " + i.off + "% under the highest price tracked here."
+            : i.vs ? "Full price here, " + i.off + "% under what other stores ask for the same item (" + money(i.vs[1], "USD") + " at " + i.vs[0] + ")."
+            : offNote(i);
     a.append(o);
   }
   if (i.first_seen && daysSince(i.first_seen) <= 3 && tab !== "wish") a.append(el("span", "new", "New"));
@@ -1005,7 +1010,8 @@ function card(i) {
   if (typical) b.append(el("div", "meta", typical));
   // What tracking says about this deal, on a line of its own.
   const facts = [], nDays = n => n === 1 ? "1 day" : n + " days";
-  if (i.off && !i.tracked_drop && !i.extra && i.first_seen) facts.push("On sale since " + shortDay(i.first_seen));
+  if (i.vs) facts.push("Not on sale: " + money(i.vs[1], "USD") + " at " + i.vs[0]);
+  else if (i.off && !i.tracked_drop && !i.extra && i.first_seen) facts.push("On sale since " + shortDay(i.first_seen));
   if (i.pre && i.was) facts.push(i.pre.high >= i.was * 0.95
     ? "Sold at " + money(i.was, i.cur) + " here for " + (i.pre.at >= 1 ? nDays(i.pre.at) : "under a day") + " before the sale"
     : "Never seen at " + money(i.was, i.cur) + " here: highest " + money(i.pre.high, i.cur) + " in the " + nDays(Math.max(1, i.pre.watched)) + " before the sale");
@@ -1165,8 +1171,12 @@ function searchTyped() { clearTimeout(typing); typing = setTimeout(() => { shown
 // from everything.json (packed by write_everything() in build.py), searched in a background worker that runs the
 // page's own search code, so typos, "jeans" and "womens" read the same as above. A tile the sale results already show
 // is left out (its panel lists the full-price stores), and the section counts tiles like the grid.
+// With nothing searched, the same section offers every full-price item, under the same filters as the list above.
+// That is the whole of everything.json in this tab, so it loads only when asked (the "Show every" button): the
+// worker hands its rows over once, and the filters run over them like the list's.
 let LAST = { list: [], brands: new Map() }, fullShown = PAGE;
-const FULL = { worker: null, ready: false, failed: false, stores: null, seq: 0, asked: "", answered: "", hits: [], total: 0, gender: "", fixed: "" };
+const FULL = { worker: null, ready: false, failed: false, stores: null, seq: 0, asked: "", answered: "", hits: [], total: 0, gender: "", fixed: "",
+               browse: false, allAsked: false, all: null };
 const FULL_CAP = 20000;                                      // hits handed back per search; beyond that the count says "+"
 // Brands a search names: a run of its words spelled as a brand ("acne studios"), a word that only one brand's titles
 // use as its first word ("acne"), or a near miss of a brand's name in a long word ("jacqemus"). Words many brands use
@@ -1231,6 +1241,7 @@ function fullWorker() {
       } catch (err) { postMessage({ failed: String(err) }); }
       return;
     }
+    if (d.all) { postMessage({ all: ROWS }); return; }       // every row, for browsing with nothing searched
     const find = searcher(d.q, ITEMS), hits = [];
     let total = 0;
     if (find) for (let n = 0; n < ITEMS.length; n++) if (find.has(ITEMS[n]) && ++total <= d.cap) hits.push(ROWS[n]);
@@ -1247,6 +1258,7 @@ function startWorker() {
     const d = e.data;
     if (d.failed) { FULL.failed = true; drawFull(); return; }
     if (d.ready) { FULL.ready = true; FULL.stores = d.stores; FULL.count = d.ready; drawFull(); return; }
+    if (d.all) { FULL.all = d.all.map(unpack); drawFull(); return; }
     if (d.seq !== FULL.seq) return;                          // a search since typed over
     Object.assign(FULL, { answered: d.q, total: d.total, gender: d.gender, fixed: d.fixed, hits: d.hits.map(unpack) });
     drawFull();
@@ -1262,7 +1274,9 @@ function unpack(r) {                                         // a row of everyth
 }
 function drawFull() {
   const sec = $("fullsec"), q = $("q").value.trim(), note = $("fullnote");
-  if (tab !== "all" || !q) { sec.hidden = true; return; }
+  $("fullbrowse").hidden = true;
+  if (tab !== "all") { sec.hidden = true; return; }
+  if (!q) { drawBrowse(); return; }
   let items, head, searched = false, extra = "";
   if (prefs.full && !FULL.failed) {
     startWorker();
@@ -1290,6 +1304,31 @@ function drawFull() {
   sec.hidden = !list.length && !extra;
   $("fullhead").textContent = head + " (" + list.length.toLocaleString() + ")";
   note.textContent = extra + "In stock and not on sale (or under " + (DATA.min_discount || 0) + "% off), so not in the list above.";
+  $("fullgrid").replaceChildren(...list.slice(0, fullShown).map(card));
+  $("fullmore").hidden = list.length <= fullShown;
+  $("fullmore").textContent = "Show more (" + (list.length - fullShown) + " left)";
+}
+
+function drawBrowse() {
+  const sec = $("fullsec"), note = $("fullnote"), head = "Full price at tracked stores";
+  if (!prefs.full || FULL.failed) { sec.hidden = true; return; }   // searching everything is switched off in Settings
+  sec.hidden = false;
+  const empty = text => { $("fullhead").textContent = head; note.textContent = text; $("fullgrid").replaceChildren(); $("fullmore").hidden = true; };
+  if (!FULL.browse) {
+    empty("Everything else the tracked stores have in stock at full price" + (FULL.count ? " (" + FULL.count.toLocaleString() + " items)" : "") +
+          ", under the filters above. A large download, so it loads when asked.");
+    $("fullbrowse").hidden = false;
+    return;
+  }
+  startWorker();
+  if (!FULL.all) {
+    if (FULL.ready && !FULL.allAsked) { FULL.allAsked = true; FULL.worker.postMessage({ all: true }); }
+    empty("Loading every in-stock full-price item, once per visit…");
+    return;
+  }
+  const list = filtered(FULL.all, LAST.brands, { skip: new Set(LAST.list.map(i => tileKey(i)).filter(Boolean)), searched: false, gender: "" });
+  $("fullhead").textContent = head + " (" + list.length.toLocaleString() + ")";
+  note.textContent = "In stock and not on sale (or under " + (DATA.min_discount || 0) + "% off), so not in the list above. The filters above apply here too.";
   $("fullgrid").replaceChildren(...list.slice(0, fullShown).map(card));
   $("fullmore").hidden = list.length <= fullShown;
   $("fullmore").textContent = "Show more (" + (list.length - fullShown) + " left)";
@@ -1510,6 +1549,7 @@ function setup() {
   $("gender").addEventListener("input", () => { prefs.gender = $("gender").value; savePrefs(); reset(); });
   $("more").onclick = () => { shown += PAGE; render(); };
   $("fullmore").onclick = () => { fullShown += PAGE; drawFull(); };
+  $("fullbrowse").onclick = () => { FULL.browse = true; fullShown = PAGE; drawFull(); };
   $("fullswitch").checked = prefs.full;
   $("fullswitch").addEventListener("input", () => { prefs.full = $("fullswitch").checked; savePrefs(); fullShown = PAGE; drawFull(); });
 
