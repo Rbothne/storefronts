@@ -32,6 +32,38 @@ never checked against robots.txt by the code, only by choice. Moved out of the t
 Looked at and left: Ecco and Blue Nile ignore their paging parameter (page two is page one again), and Foot
 Locker and Champs Sports do too (`currentPage=1` serves page 1), so setting robots.txt aside gains nothing there.
 
+### Designer sweep, November 2026
+
+121 designer and mid-to-high-end hosts not yet in `stores.json` were asked for an open Shopify feed, one request
+each, and 48 more through `tools/routes.py`. **Added (44)**, all through their own Shopify feed unless named:
+AGOLDE, Albam, Altuzarra, Aspesi, Base Blu, Bather, Bellerose, Biffi, Canada Goose, CDLP, Cecilie Bahnsen,
+Citizens of Humanity, Doppiaa, Fortela, FRAME, Haven, Hirshleifers, Hope, Isabel Marant, Kiko Kostadinov, Mackage,
+Mansur Gavriel, Martine Rose, MOTHER, nanamica (`nanamica.myshopify.com`), Nobis, Oi Polloi, Orlebar Brown,
+Proenza Schouler, Raleigh Denim Workshop, Rouje, sacai, Simone Rocha, Smets, Staud, Story mfg., Taylor Stitch,
+The Row, Toteme (`toteme-studio.com`), Ulla Johnson, Universal Works, Veronica Beard, Wales Bonner, Wandler.
+Several brand feeds put season codes or a shipping add-on in the vendor field (Cecilie Bahnsen's "PS27",
+"AW26"; Mansur Gavriel's "Route"), so brand stores carry a fixed `brand`.
+
+Left out on purpose: Stuarts London and Sunday Somewhere (below the tier), Fred Segal and Molly Goddard (one or two
+products in the feed), `apc.fr` (A.P.C. is read through its US store), `toteme.com` (the same shop as
+`toteme-studio.com`).
+
+Leads not taken up yet:
+- **Etro** (`www.etro.com/us-en/...`): category pages page with `?start=&sz=` and carry product data (`via: json`,
+  60 a page), but the data names items by their slug ("cotton_jacquard_shirt_with_pai..."): needs `fields` /
+  `title` mapping before it reads cleanly.
+- **Zimmermann** (Searchspring) and **Herno** (Constructor): a search platform each, no reader for either yet.
+- **Maje** (`us.maje.com`): JSON-LD and tiles with ids, but the grid is built in the browser (two items a page):
+  a harvest candidate, like Sandro.
+- **The Kooples**: the US site quotes EUR and `?p=2` serves page one again.
+- Refused or priced only in the browser (403, a 0-byte answer, or nothing recognised): Jacquemus, Alexander
+  McQueen, Loro Piana, Marni, Jil Sander, Missoni, Versace, C.P. Company, COS, Arket, & Other Stories, Sezane,
+  Closed, Les Secrets, Theory, Brunello Cucinelli, Zegna, Tessabit, Vitkac, Fendi, AMI Paris (`ami-paris.com`;
+  the brand is read elsewhere), Craig Green, YMC, Stine Goya, Rotate, Lardini, Pucci, Hanon, Livestock, United
+  Arrows, Wings + Horns, Save the Duck, Aesther Ekme, Frescobol Carioca, Coltorti, Boglioli, Our Legacy, Nanushka,
+  Sandro, rag & bone, Filippa K, Ganni (Bloomreach), Samsoe Samsoe, Tiger of Sweden, Giglio, BSTN, The Corner
+  (Typesense), Wrong Weather, Caruso, Mulberry, Burberry's own site, Heron Preston, Valentino, Bona, and wander.
+
 ## No store in here is finished
 
 A verdict below records **a route that was tried**, never a store that is beyond reading. Both of the hardest

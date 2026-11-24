@@ -390,7 +390,7 @@ def colour_label(ids, listings, info, others=()):
     it = listings[ids[0]]
     theirs = {w for u in others for x in u for w in re.findall(r"[a-z0-9]+", (listings[x].get("title") or "").lower())}
     skip = set(re.findall(r"[a-z0-9]+", (it.get("brand") or "").lower())) | NOT_A_COLOUR
-    own = [w for w in re.findall(r"[A-Za-z]{2,}", re.sub(r"['’]s", "", it.get("title") or ""))
+    own = [w for w in re.findall(r"[A-Za-z]{2,}", re.sub(r"['’]s\b", "", it.get("title") or ""))
            if w.lower() not in theirs and w.lower() not in skip]
     if own and others:
         return " ".join(own[:4]).title()

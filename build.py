@@ -128,8 +128,15 @@ def num(x):
         return None
 
 
+# Things a shop sells that are not products: delivery insurance, gift cards, a donation, a sample of swatches.
+NOT_A_PRODUCT = re.compile(r"\b(shipping|package|order|delivery) (protection|insurance)\b|\broute (package )?protection\b"
+                           r"|\be-?gift ?cards?\b|\bgift ?cards?\b|\bgift (voucher|certificate)\b|\bdonation\b|\bswatch(es)? sample", re.I)
+
+
 def shopify_item(host, p, cents=False):
     """Normalise one product from products.json (dollars) or /products/x.js (cents)."""
+    if NOT_A_PRODUCT.search(p.get("title") or "") or (p.get("product_type") or "").lower() in ("gift card", "giftcard", "insurance"):
+        return None
     div = 100.0 if cents else 1.0
     variants = p.get("variants") or []
     live = [v for v in variants if v.get("available")] or variants
