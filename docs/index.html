@@ -498,11 +498,13 @@ function offNote(i) {                                        // badge tooltip: t
 const crowdedOut = i => prefs.calm && CROWD.hosts.has(i.store) && !(i.store in prefs.storeCats);
 const ruledOut = i => i.store in prefs.hidden || brandKey(i.brand) in prefs.muted;    // store or brand you hid
 // Menu values: "c:<name>" is one of your categories; "none" and "hidden" are built in.
-function storeShown(i) {
-  const want = $("storecat").value, mine = prefs.storeCats[i.store] || [];
+// The two store menus, read once per pass over the items rather than once per item.
+const storeMenus = () => ({ want: $("storecat").value, store: $("store").value });
+function storeShown(i, m = storeMenus()) {
+  const want = m.want, mine = prefs.storeCats[i.store] || [];
   if (want === "hidden") return ruledOut(i);                 // the one place hidden things are shown
   if (want === "crowded") return CROWD.hosts.has(i.store) && !ruledOut(i);
-  if (ruledOut(i) || (crowdedOut(i) && $("store").value !== i.store)) return false;   // picking a store by name still shows it
+  if (ruledOut(i) || (crowdedOut(i) && m.store !== i.store)) return false;   // picking a store by name still shows it
   return !want || (want === "none" ? !mine.length : mine.includes(want.slice(2)));
 }
 // Tracked prices. hist is the item's list of [day, price] change points (only present once the price has changed).
@@ -533,10 +535,10 @@ function score(i, brands) {
 }
 // Men's and women's leaves out kids' items; men's or women's also keeps unlabelled items (they count as unisex).
 const fitsShown = (i, gen) => gen === "k" ? i.g === "k" : gen ? !i.g || i.g === gen : i.g !== "k";
-function inTab(i, key, brands) {
+function inTab(i, key, brands, m = storeMenus()) {
   if (key === "wish") return isFollowed(i);                  // followed items ignore hidden stores
   if (i.gone) return key === "all" && i.id in prefs.itemCats;   // categorised, but no longer on sale
-  if (!storeShown(i)) return false;
+  if (!storeShown(i, m)) return false;
   if (key === "brands") return brands.has(brandOf(i)) && !isFollowed(i);
   if (i.extra) return false;                                 // off the list: only shown under its brand, or when followed
   return key === "all" || i.tags.includes(key);
@@ -710,17 +712,17 @@ function filtered(items, brands) {
   const min = +$("minoff").value, stock = tab === "wish" && $("stock").checked, mine = $("mysizes").checked;
   const gen = find && find.gender || $("gender").value;      // "kids jeans" in the search box outranks the menu
   const cat = $("itemcat").value.slice(2);
-  const sort = $("sort").value;
+  const sort = $("sort").value, menus = storeMenus();
   const list = items.filter(i =>
-    inTab(i, tab, brands) &&
+    (!find || find.has(i)) &&                                // first: a search rules out most items, and cheaply
+    inTab(i, tab, brands, menus) &&
     // the two price-history sorts list only items whose price actually fell while tracked
     (sort !== "drop" || (dropped(i) || rose(i)) && !i.storewide) &&
     (!picked.size || picked.has(leafOf(i))) && (!s || i.store === s) &&
     (i.off || 0) >= min && (!stock || i.avail === true) && (!mine || sizeOK(i)) &&
     inPrice(i, plo, phi) &&
     fitsShown(i, gen) &&
-    (!cat || (prefs.itemCats[i.id] || []).includes(cat)) &&
-    (!find || find.has(i)));
+    (!cat || (prefs.itemCats[i.id] || []).includes(cat)));
   const key = SORTS[sort].key, keys = new Map(list.map(i => [i, key(i, brands)]));
   const cmp = (x, y) => typeof x === "string" ? x.localeCompare(y) : x - y;
   list.sort((a, b) => {
@@ -924,12 +926,14 @@ function card(i) {
 }
 
 function counts(items, brands = followedBrands(items)) {
+  const m = storeMenus();
   for (const btn of $("tabs").children) {
-    btn.lastChild.textContent = items.filter(i => inTab(i, btn.dataset.tab, brands)).length;
+    btn.lastChild.textContent = items.filter(i => inTab(i, btn.dataset.tab, brands, m)).length;
     btn.setAttribute("aria-pressed", btn.dataset.tab === tab);
   }
 }
-function render() {
+// typed: only the search box changed. The tab counts don't depend on it, so they are left as they are.
+function render(typed = false) {
   const items = pool(), brands = followedBrands(items), list = filtered(items, brands), grid = $("grid");
   showChanges(); showBrandBox();
   grid.replaceChildren(...list.slice(0, shown).map(card));
@@ -967,10 +971,13 @@ function render() {
   $("filtersbtn").textContent = "Filters" + (set ? " · " + set : "");
   $("more").hidden = list.length <= shown;
   $("more").textContent = "Show more (" + (list.length - shown) + " left)";
-  counts(items, brands);
+  if (!typed) counts(items, brands);
   $("stock").parentNode.hidden = tab !== "wish";
 }
 function reset() { shown = PAGE; render(); }
+// The search redraws once typing pauses, not on every key: a redraw goes through every listed item.
+let typing = 0;
+function searchTyped() { clearTimeout(typing); typing = setTimeout(() => { shown = PAGE; render(true); }, 150); }
 
 // The range in words, for the assistant's view of the screen.
 const priceWords = ([lo, hi]) =>
@@ -1180,7 +1187,8 @@ function setup() {
   $("sort").addEventListener("input", () => { dir = SORTS[$("sort").value].dir; showDir(); });   // before the redraw below
   $("dir").onclick = () => { dir = -dir; showDir(); reset(); };
   showDir();
-  for (const id of ["q", "store", "itemcat", "storecat", "minoff", "sort", "stock", "mysizes"]) $(id).addEventListener("input", reset);
+  $("q").addEventListener("input", searchTyped);
+  for (const id of ["store", "itemcat", "storecat", "minoff", "sort", "stock", "mysizes"]) $(id).addEventListener("input", reset);
   for (const id of ["pmin", "pmax"]) $(id).addEventListener("input", reset);
   $("gender").value = prefs.gender;                           // remembered between visits
   $("gender").addEventListener("input", () => { prefs.gender = $("gender").value; savePrefs(); reset(); });
