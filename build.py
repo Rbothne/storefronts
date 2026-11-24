@@ -6,6 +6,7 @@ Reads   stores.json   (which stores, how to read them)
 Writes  docs/data.json     (what the page shows)
         data/state/        (one file per store: price, discount and stock changes of every product; see history.py)
         docs/metrics.json  (indicators for the metrics page, worked out from data/state/)
+        docs/brands/, docs/matches/  (each brand's whole range; every store's offer of an item sold at several)
 
 Shopify stores are read here; stores that are not open Shopify feeds are read by listings.py.
 Standard library only.  Run:  python3 build.py
@@ -26,6 +27,7 @@ from urllib.parse import unquote, urlparse
 
 import history
 import listings
+import matching
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -723,12 +725,15 @@ def write_catalog(catalog, stores):
             os.remove(os.path.join(CATALOG_DIR, file))
 
 
-def write_brand_files():
+def write_brand_files(marks=None):
     """Regroup every store's catalogue by brand into docs/brands/, with an index of the brands for the page's
-    brand lookup: index.json lists [name, items] for each brand, biggest first, under its most common spelling."""
+    brand lookup: index.json lists [name, items] for each brand, biggest first, under its most common spelling.
+    marks: the product each matched listing belongs to (see match_products)."""
     files, names = [[] for _ in range(BRAND_FILES)], {}
     for file in sorted(os.listdir(CATALOG_DIR)) if os.path.isdir(CATALOG_DIR) else []:
         for it in load_json(os.path.join(CATALOG_DIR, file), []):
+            if marks and it["id"] in marks:
+                it["m"], it["mn"] = marks[it["id"]]
             name = (it.get("brand") or it["store_name"]).strip()
             key = brand_key(name)
             if key:
@@ -740,6 +745,46 @@ def write_brand_files():
         write_lines(os.path.join(BRANDS_DIR, f"{n}.json"), found)
     index = [[max(sp, key=sp.get), sum(sp.values())] for sp in names.values()]
     write_lines(os.path.join(BRANDS_DIR, "index.json"), sorted(index, key=lambda row: (-row[1], row[0].lower())))
+
+
+def match_products(items, state, rates, stores):
+    """Find the listings that are the same item at different stores (matching.py), across the list and every
+    store's catalogue on disk (stores not read this run keep theirs). Marks each matched item on the list with
+    its product (`m`) and how many stores carry it (`mn`), writes docs/matches/, and returns the marks for the
+    brand files. The catalogue files are left without them: they are the build's own input, and the marks are
+    worked out afresh every run."""
+    t = time.time()
+    _, every = matching.load_listings(None, CATALOG_DIR)
+    for it in items:
+        it.pop("m", None)
+        it.pop("mn", None)
+        if it.get("price") is not None:
+            every[it["id"]] = it                       # the list's copy wins: it is the one shown
+    marks = matching.match(every, state, rates, {h: s.get("name", h) for h, s in stores.items()})
+    for it in items:
+        if it["id"] in marks:
+            it["m"], it["mn"] = marks[it["id"]]
+    print(f"matched {len({m for m, _ in marks.values()})} products across stores ({len(marks)} listings) "
+          f"in {time.time() - t:.0f} s", flush=True)
+    return marks
+
+
+def write_data(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+
+
+def regroup():
+    """`--brands`: regroup the catalogue for the page when only the page changed, and match products again,
+    since docs/data.json then comes straight from the data branch."""
+    path = os.path.join(ROOT, "docs", "data.json")
+    data = load_json(path, {"items": []})
+    cfg = load_json(os.path.join(ROOT, "stores.json"), {"stores": []})
+    rates = {**FALLBACK_RATES, **(data.get("rates") or {})}
+    marks = match_products(data["items"], history.load_state(), rates, {s["host"]: s for s in cfg["stores"]})
+    write_brand_files(marks)
+    if data["items"]:
+        write_data(path, data)
 
 
 # ---------------------------------------------------------------- main
@@ -1056,21 +1101,20 @@ def main():
         del state[host]
     history.save_state(state)
     write_catalog(catalog, stores)
-    write_brand_files()
+    write_brand_files(match_products(list(items.values()), state, rates, stores))
     # a line about this run for the metrics page: the only place its speed and its refusals can be seen from outside
     run = {"t": T, "every_store": stalest is None, "stores": sum(1 for h in hosts if stores[h]["platform"] != "link"),
            "minutes": round((time.time() - began) / 60, 1), "requests": COUNT["requests"], "refused": COUNT["refused"],
            "limited": len(limited), "still_limited": still, "failed": sum(1 for s in status if not s["ok"]),
            "lanes": settings.get("workers", 6)}
     history.write_metrics(state, cfg, NOW, run)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "generated": NOW,
-            "min_discount": min_off,
-            "rates": {c: rates[c] for c in sorted({i["cur"] for i in items.values()}) if c in rates},
-            "status": status,
-            "items": sorted(items.values(), key=lambda i: (-i["off"], i["store"], i["title"])),
-        }, f, ensure_ascii=False, separators=(",", ":"))
+    write_data(out_path, {
+        "generated": NOW,
+        "min_discount": min_off,
+        "rates": {c: rates[c] for c in sorted({i["cur"] for i in items.values()}) if c in rates},
+        "status": status,
+        "items": sorted(items.values(), key=lambda i: (-i["off"], i["store"], i["title"])),
+    })
 
     bad = [s["host"] for s in status if not s["ok"]]
     print(f"\n{len(items)} items written. Stores with errors: {', '.join(bad) or 'none'}")
@@ -1078,6 +1122,6 @@ def main():
 
 if __name__ == "__main__":
     if "--brands" in sys.argv:          # only regroup the catalogue for the page (a page change is being published)
-        write_brand_files()
+        regroup()
     else:
         main()

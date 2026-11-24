@@ -40,7 +40,7 @@ Style: direct and conversational, like a knowledgeable friend. Lead with the ans
 const TOOLS = [
   {
     name: "search_site_items",
-    description: "Search the items currently listed on the site. Use this before recommending anything. Every filter is optional; combine them to narrow down. Returns the number of matches and the top results with price, discount, sizes in stock and a link. Stores and brands the person hid on the site are left out. The site lists sale items; for the brands the person follows it also has the full-price range (those results have no discount), so set min_discount when they only want markdowns.",
+    description: "Search the items currently listed on the site. Use this before recommending anything. Every filter is optional; combine them to narrow down. Returns the number of matches and the top results with price, discount, sizes in stock and a link. Stores and brands the person hid on the site are left out. The site lists sale items; for the brands the person follows it also has the full-price range (those results have no discount), so set min_discount when they only want markdowns. The same item sold at several stores comes back once, with other_stores (every other store's price, full-price listings included, so compare usd) and, where known, sold_before (stores that had it and what they charged).",
     eager_input_streaming: true,
     input_schema: {
       type: "object",
@@ -130,7 +130,7 @@ function brief(i) {
   o.first_seen = i.first_seen; o.url = i.url;
   return o;
 }
-function searchItems(a) {
+async function searchItems(a) {
   const all = [...DATA.items, ...extras()], find = searcher(a.query || "", all), has = (text, part) => !part || (text || "").toLowerCase().includes(part.toLowerCase());   // the page's own search
   const gen = { men: "m", women: "w", kids: "k" }[a.fits] || find && find.gender || "", brands = followedBrands(pool());
   let list = all.filter(i => {
@@ -152,8 +152,19 @@ function searchItems(a) {
               price_drop: (x, y) => dropShare(y) - dropShare(x) || (y.off || 0) - (x.off || 0),
               price_rise: (x, y) => riseShare(y) - riseShare(x),
               newest: (x, y) => (y.first_seen || "").localeCompare(x.first_seen || "") }[a.sort || "best"]);
-  const limit = Math.min(Math.max(a.limit || 15, 1), 30);
-  return { site_last_updated: DATA.generated, ...(find && find.fixed ? { query_read_as: find.fixed } : {}), total_matches: list.length, showing: Math.min(limit, list.length), items: list.slice(0, limit).map(brief) };
+  // like the grid, one result per product: the first listing of it in this order
+  const seen = new Set();
+  list = list.filter(i => !i.m || !seen.has(i.m) && seen.add(i.m));
+  const limit = Math.min(Math.max(a.limit || 15, 1), 30), top = list.slice(0, limit).map(brief);
+  // the same item at other stores, full price included, from the panel's files (fetched once per file)
+  await Promise.all(list.slice(0, limit).map(async (i, n) => {
+    if (!i.m || !(i.mn > 1)) return;
+    const info = await productInfo(i.m), offers = info ? info.offers : loadedOffers(i.m);
+    top[n].other_stores = offers.filter(o => o.id !== i.id).map(o => ({ store: o.store_name, price: o.price, currency: o.cur,
+      usd: o.usd, percent_off: o.off || 0, sizes_in_stock: o.sizes, url: o.url, id: o.id }));
+    if (info && info.past.length) top[n].sold_before = info.past.map(p => ({ store: p.store_name, price: p.price, currency: p.cur, usd: p.usd, last_seen: p.seen }));
+  }));
+  return { site_last_updated: DATA.generated, ...(find && find.fixed ? { query_read_as: find.fixed } : {}), total_matches: list.length, showing: Math.min(limit, list.length), items: top };
 }
 function showItems(a, into) {
   const byId = new Map(pool().map(i => [i.id, i])), found = a.ids.slice(0, 8).map(id => byId.get(id)).filter(Boolean);
@@ -323,13 +334,13 @@ async function ask(text) {
     if (message.stop_reason === "max_tokens") {              // a tool call cut off mid-way must not be run
       convo.length = turnStart; turn.append(el("div", "note", "The reply was cut off before it finished. Please ask again.")); return;
     }
-    convo.push({ role: "user", content: calls.map(call => {
+    convo.push({ role: "user", content: await Promise.all(calls.map(async call => {
       const tool = TOOLS.find(t => t.name === call.name);
       if (!tool || !validInput(tool, call.input))
         return { type: "tool_result", tool_use_id: call.id, is_error: true, content: JSON.stringify({ INVALID_JSON: JSON.stringify(call.input) }) };
-      try { return { type: "tool_result", tool_use_id: call.id, content: JSON.stringify(RUN[call.name](call.input, turn)) }; }
+      try { return { type: "tool_result", tool_use_id: call.id, content: JSON.stringify(await RUN[call.name](call.input, turn)) }; }
       catch (e) { return { type: "tool_result", tool_use_id: call.id, is_error: true, content: "The tool failed: " + e.message }; }
-    }) });
+    })) });
     setBusy(true, "Thinking…");
   }
   turn.append(el("div", "note", "Stopped after many steps. Ask again to continue."));

@@ -117,6 +117,20 @@
   .price s, .price .usd { color: var(--muted); margin-left: 6px; }
   .price .now.sale { color: var(--sale); font-weight: 700; }
   .meta { color: var(--muted); font-size: 12px; }
+  .stores { color: var(--accent); font-size: 12px; font-weight: 600; }
+  /* the comparison panel: one row per store, wrapping to two lines on a phone */
+  #compare .offer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 9px 0;
+                    border-top: 1px solid var(--line); }
+  #compare .offer:first-of-type { border-top: 0; }
+  #compare .offer .who { font-weight: 600; overflow-wrap: anywhere; }
+  #compare .offer .who span { color: var(--muted); font-weight: 400; }
+  #compare .offer .cost { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #compare .offer .cost .sale { color: var(--sale); font-weight: 700; }
+  #compare .offer .meta { grid-column: 1; }
+  #compare .offer a { grid-column: 2; grid-row: 2 / span 2; align-self: center; justify-self: end; color: var(--accent); white-space: nowrap; }
+  #compare .offer.here { background: var(--chip); margin: 0 -8px; padding: 9px 8px; border-radius: 8px; }
+  #compare ul { margin: 4px 0 0; padding-left: 18px; }
+  #compare li { margin: 3px 0; }
   #more { display: block; margin: 18px auto 0; padding: 9px 18px; border-radius: 8px;
           border: 1px solid var(--line); background: var(--card); }
   #more[hidden], .filters [hidden] { display: none; }  /* display:block above would otherwise override the hidden attribute */
@@ -296,6 +310,11 @@
 </dialog>
 
 <div id="toast" role="status" hidden></div>
+
+<dialog id="compare" aria-label="Every store's price">
+  <div id="comparebody"></div>
+  <div class="bar"><span></span><button class="pill" id="closecompare">Done</button></div>
+</dialog>
 
 <dialog id="organize">
   <div id="orgbody"></div>
@@ -703,6 +722,40 @@ function searcher(text, items) {
 }
 // ---- end of search
 
+// ---- the same item at several stores. The build matches listings across stores (matching.py) and marks each with
+// its product (m) and how many stores carry it (mn). The grid shows one tile per product: of its listings that pass
+// the filters, the one the sort ranks first in its usual direction (cheapest for Price, deepest for Discount, best
+// score for Top picks), whichever way the list is turned. Within a few dollars or points, the listing in the
+// viewer's own currency wins: shipping and duties can outweigh the difference.
+const EURO = new Set("AT BE CY DE EE ES FI FR GR HR IE IT LT LU LV MT NL PT SI SK".split(" "));
+const HOME_CUR = (() => {
+  const region = ((navigator.languages && navigator.languages[0]) || navigator.language || "").split("-")[1]?.toUpperCase();
+  if (!region) return "USD";
+  return EURO.has(region) ? "EUR" : { US: "USD", GB: "GBP", JP: "JPY", CA: "CAD", AU: "AUD", KR: "KRW", SE: "SEK", DK: "DKK",
+    NO: "NOK", CH: "CHF", NZ: "NZD", HK: "HKD", SG: "SGD", CN: "CNY", TW: "TWD" }[region] || "";
+})();
+function onePerProduct(list, keys, sort) {
+  const d = SORTS[sort].dir, near = (x, y) => sort === "price" ? Math.abs(x - y) <= Math.max(5, 0.03 * Math.min(x, y))
+    : typeof x === "number" && Math.abs(x - y) <= TIE;
+  const better = (a, b) => {                                 // is listing a the better tile for its product than b?
+    const x = keys.get(a), y = keys.get(b);
+    if (x == null || y == null) return y == null && x != null;
+    if (near(x, y) && (a.cur === HOME_CUR) !== (b.cur === HOME_CUR)) return a.cur === HOME_CUR;
+    const c = typeof x === "string" ? x.localeCompare(y) : x - y;
+    return c ? d * c < 0 : (a.usd ?? a.price ?? 0) < (b.usd ?? b.price ?? 0);
+  };
+  const best = new Map();
+  for (const i of list) if (i.m && (!best.has(i.m) || better(i, best.get(i.m)))) best.set(i.m, i);
+  return best.size ? list.filter(i => !i.m || best.get(i.m) === i) : list;
+}
+// How many tiles a list makes: a product at several stores counts once.
+function tileCount(list) {
+  const seen = new Set();
+  let n = 0;
+  for (const i of list) if (!i.m) n++; else if (!seen.has(i.m)) { seen.add(i.m); n++; }
+  return n;
+}
+
 let searchRead = "";   // the search as it was read, when a word of it was taken for a misspelling (shown on the count line)
 function filtered(items, brands) {
   const find = searcher($("q").value, items), s = $("store").value;
@@ -713,7 +766,7 @@ function filtered(items, brands) {
   const gen = find && find.gender || $("gender").value;      // "kids jeans" in the search box outranks the menu
   const cat = $("itemcat").value.slice(2);
   const sort = $("sort").value, menus = storeMenus();
-  const list = items.filter(i =>
+  let list = items.filter(i =>
     (!find || find.has(i)) &&                                // first: a search rules out most items, and cheaply
     inTab(i, tab, brands, menus) &&
     // the two price-history sorts list only items whose price actually fell while tracked
@@ -724,6 +777,7 @@ function filtered(items, brands) {
     fitsShown(i, gen) &&
     (!cat || (prefs.itemCats[i.id] || []).includes(cat)));
   const key = SORTS[sort].key, keys = new Map(list.map(i => [i, key(i, brands)]));
+  list = onePerProduct(list, keys, sort);                    // after the filters: the tile is the best listing that passes
   const cmp = (x, y) => typeof x === "string" ? x.localeCompare(y) : x - y;
   list.sort((a, b) => {
     const x = keys.get(a), y = keys.get(b);
@@ -877,6 +931,9 @@ function spark(i) {
 
 function card(i) {
   const c = el("div", "card"), a = el("a"); a.href = i.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+  const several = i.m && i.mn > 1;
+  // sold at several stores: a click opens every store's price; a middle or modified click still opens this store
+  if (several) a.onclick = e => { if (e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); compare(i); };
   const pic = el("div", "pic");
   if (i.img) {
     const img = el("img"); img.loading = "lazy"; img.alt = ""; img.referrerPolicy = "no-referrer"; img.src = thumb(i.img);
@@ -899,6 +956,10 @@ function card(i) {
     if (i.was) p.append(el("s", null, money(i.was, i.cur)));
     if (i.cur !== "USD" && i.usd != null) p.append(el("span", "usd", "≈ " + money(Math.round(i.usd), "USD")));
     b.append(p);
+  }
+  if (several) {
+    const n = el("div", "stores", i.mn + " stores");
+    n.title = "Sold at " + i.mn + " stores: click to compare their prices"; b.append(n);
   }
   if (i.hist && i.price != null) b.append(spark(i));
   const notes = [];
@@ -925,10 +986,68 @@ function card(i) {
   return c;
 }
 
+// ---- the comparison panel. matches/<n>.json holds, per product, every store's offer (cheapest first, in US dollars,
+// full-price listings included) and the stores that sold it before; the file is fetched when a panel first needs it.
+// matchFile() must match bucket() in matching.py.
+const MATCH_FILES = 256, MATCHES = new Map();               // file number -> a promise of {product id: {offers, past}}
+const matchFile = m => { let n = 0; for (const c of m) n = (n * 31 + c.charCodeAt(0)) % MATCH_FILES; return n; };
+function productInfo(m) {
+  const n = matchFile(m);
+  if (!MATCHES.has(n)) MATCHES.set(n, fetch("matches/" + n + ".json", { cache: "no-cache" })
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .catch(() => { MATCHES.delete(n); return {}; }));     // try again next time
+  return MATCHES.get(n).then(f => f[m] || null);
+}
+// What the page itself holds of a product, should its file not come: the listings loaded with the same id.
+const loadedOffers = m => pool().filter(i => i.m === m && i.price != null && !i.gone)
+  .sort((a, b) => (a.usd ?? a.price) - (b.usd ?? b.price));
+const monthOf = d => new Date(d + "T12:00:00Z").toLocaleDateString(undefined,
+  { month: "long", ...(d.slice(0, 4) !== TODAY.slice(0, 4) ? { year: "numeric" } : {}) });
+function compare(i) {
+  const box = $("comparebody"), dlg = $("compare");
+  box.replaceChildren(el("h2", null, i.title), el("p", null, "Looking up every store's price…"));
+  dlg.showModal();
+  productInfo(i.m).then(info => {
+    if (!dlg.open) return;
+    const offers = info ? info.offers : loadedOffers(i.m);
+    if (offers.length < 2) { dlg.close(); window.open(i.url, "_blank", "noopener"); return; }
+    const rows = offers.map(o => {
+      const row = el("div", "offer" + (o.id === i.id ? " here" : "")), who = el("div", "who", o.store_name);
+      if (o.id === i.id) who.append(el("span", null, " · this listing"));
+      const cost = el("div", "cost"), usd = o.usd ?? (o.cur === "USD" ? o.price : null);
+      cost.append(el("span", o.off ? "sale" : null, usd != null ? money(Math.round(usd), "USD") : money(o.price, o.cur)));
+      if (usd != null && o.cur !== "USD") cost.append(el("span", "meta", " " + money(o.price, o.cur)));
+      const facts = [o.off ? o.off + "% off" : "Full price"];
+      if (o.avail === false) facts.push("Sold out");
+      facts.push(o.sizes && o.sizes.length ? "Sizes: " + o.sizes.join(", ") : "Sizes not listed");
+      const a = el("a", null, "Open ↗"); a.href = o.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.setAttribute("aria-label", "Open at " + o.store_name);
+      row.append(who, cost, el("div", "meta", facts.join(" · ")), a);
+      if (o.title !== i.title) row.append(el("div", "meta", o.title));
+      return row;
+    });
+    // history: the stores that sold it before, and the lowest a store still selling it has asked
+    const was = [...(info ? info.past : []).map(p => [p.seen, p.store_name + " had it for " +
+                   (p.usd != null ? money(Math.round(p.usd), "USD") : money(p.price, p.cur)) + (p.off ? " (" + p.off + "% off)" : "") + " in " + monthOf(p.seen)]),
+                 ...offers.filter(o => o.low).map(o => [o.low[1], o.store_name + " had it for " +
+                   (o.usd != null ? money(Math.round(o.usd * o.low[0] / o.price), "USD") : money(o.low[0], o.cur)) + " on " + shortDay(o.low[1])])]
+      .sort((x, y) => y[0].localeCompare(x[0]));
+    const parts = [el("h2", null, i.title),
+      el("p", null, "At " + offers.length + " stores, cheapest first. Prices compared in US dollars at today's rates; " +
+                    "shipping and duties are not included."), ...rows];
+    if (was.length) {
+      const ul = el("ul");
+      ul.append(...was.map(([, text]) => el("li", null, text)));
+      parts.push(el("h3", null, "Price history"), ul);
+    }
+    box.replaceChildren(...parts);
+  });
+}
+
 function counts(items, brands = followedBrands(items)) {
   const m = storeMenus();
   for (const btn of $("tabs").children) {
-    btn.lastChild.textContent = items.filter(i => inTab(i, btn.dataset.tab, brands, m)).length;
+    btn.lastChild.textContent = tileCount(items.filter(i => inTab(i, btn.dataset.tab, brands, m)));
     btn.setAttribute("aria-pressed", btn.dataset.tab === tab);
   }
 }
@@ -1198,8 +1317,9 @@ function setup() {
   $("closesettings").onclick = () => $("settings").close();
   $("calm").onchange = () => { prefs.calm = $("calm").checked; savePrefs(); reset(); };
   $("closeorganize").onclick = () => $("organize").close();
+  $("closecompare").onclick = () => $("compare").close();
   $("organize").addEventListener("close", () => { fillCatMenus(); render(); });   // show what changed, keep your place
-  for (const d of [$("settings"), $("organize")]) d.addEventListener("click", e => { if (e.target === d) d.close(); });
+  for (const d of [$("settings"), $("organize"), $("compare")]) d.addEventListener("click", e => { if (e.target === d) d.close(); });
   $("copylinks").onclick = () => {
     const links = Object.values(prefs.follows).map(f => f.url).join("\n");
     navigator.clipboard.writeText(links).then(() => { $("copylinks").textContent = "Copied " + Object.keys(prefs.follows).length + " links"; });

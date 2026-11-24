@@ -10,6 +10,7 @@ data/state/
 docs/metrics.json
 data/catalog/
 docs/brands/
+docs/matches/
 
 # (the browser harvest of the guarded stores, also kept on the "data" branch)
 data/harvest/
