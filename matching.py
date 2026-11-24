@@ -7,10 +7,11 @@ catalogue (data/catalog/). A listing that is the same item as a listing at *anot
 and the stores that sold it before (from the tracking files). The page merges a product's tiles into one and opens
 the comparison from there.
 
-Two things say two listings are one item, and only with the same brand:
+Three things say two listings are one item, always with the same brand:
   - the maker's style code, written into the title, the address, the id or the picture's file name
     (`S57WS0517`, `80D1403080`, `ir8176-002`)
   - the same image file, which boutiques that resell each other's stock (or the brand's own photos) reuse
+  - the same title word for word, colour words included, with photos of one colour at much the same full price
 Titles alone never make a match: on their own they merged black and beige versions of the same shorts and built a
 449-listing junk group. A different colour is a different product, so a code shared by several colours (some
 makers leave the colour out of it) is split by colour, and a listing that names none is left out of such a code.
@@ -18,10 +19,19 @@ A code that is only part of an item (a fabric shared by a dress and a shirt), a 
 listings under one key, shoes beside clothes, and full prices three times apart all stop a match too.
 Wrong merges are worse than missed ones: anything doubtful is dropped.
 
+The photos (imagesig.py: a 32-pixel copy of each one a code or a title ties to another store's) decide what the
+words can't, in two steps after the words have made the items, so they never undo what the words got right:
+veto() takes out a listing whose photo, framed like the others', is plainly another colour, and attach() puts a
+listing whose words named no colour into the item its photo clearly matches. Each rule was set by judging pairs
+by eye (test-tools/pairs.py, diffmatch.py: two photos side by side): on the live data in November 2026, sampled
+exact items were right 30 times in 32 (both misses joined through a third listing), and in the last sample of
+what the photos added, 35 times in 36 (the miss: a skirt and trousers). The numbers are in the constants below.
+
 Run  py matching.py  to match the files on disk and print the groups for a look (nothing is written).
 """
 import collections
 import hashlib
+import math
 import json
 import os
 import re
@@ -148,11 +158,41 @@ def store_of(listing_id):
     return listing_id.split("/", 1)[0]
 
 
+def telling(x):
+    """Does listing x's photo say what colour it is? Read, and the item fills enough of it."""
+    return x in PHOTO and PHOTO[x][2] >= FILLS
+
+
+def photo_gap(x, group, nearest=False):
+    """How far listing x's photo colour is from a group of listings': from the farthest of the group's telling
+    photos (so x is close only if close to all of them, and no one near member can chain it into a group of another
+    colour), or with nearest, from the nearest (so x is far only if far from all). None if unknown."""
+    if not telling(x):
+        return None
+    seen = [math.dist(PHOTO[x][1], PHOTO[y][1]) for y in group if telling(y) and y != x]
+    return (min(seen) if nearest else max(seen)) if seen else None
+
+
+def placed(x, groups):
+    """Which of these groups (key -> listings) x's photo clearly belongs to: close to every photo of one (PLACE),
+    and far from every photo of each other (CLEAR). None if no group is that clear, or x's photo says nothing."""
+    near = sorted((g, k) for k, u in groups.items() for g in [photo_gap(x, u)] if g is not None)
+    if not near or near[0][0] > PLACE:
+        return None
+    best = near[0][1]
+    for k, u in groups.items():
+        g = photo_gap(x, u, nearest=True)
+        if k != best and g is not None and g < CLEAR:
+            return None
+    return best
+
+
 def colour_parts(ids, info):
     """Split listings by the colours they name. Each colour that no other named colour sits inside ("navy" inside
     "blue navy") starts a part; a listing joins the one part whose colour it names. A listing that names none, or
-    whose colours fit two parts ("black white" beside "black" and "white"), can't be placed and is left out.
-    Listings that name one colour, or none, stay together."""
+    whose colours fit two parts ("black white" beside "black" and "white"), can't be placed by its words and is left
+    out (attach() may place it by its photo, once the items are made). Listings that name one colour, or none,
+    stay together."""
     named = {info[x][1] for x in ids if info[x][1]}
     least = [a for a in named if not any(b < a for b in named)]
     if len(least) <= 1:
@@ -163,6 +203,87 @@ def colour_parts(ids, info):
         if len(fits) == 1:
             parts[fits[0]].append(x)
     return list(parts.values())
+
+
+def same_shot(x, y):
+    return bin(int(PHOTO[x][0], 16) ^ int(PHOTO[y][0], 16)).count("1") <= SAME_SHOT
+
+
+def veto(ids):
+    """An exact item's listings, less any whose photo shows another colour: one FAR in colour from every other
+    photo among them that is framed the same way (shapes within SAME_SHOT bits). Only like photos are compared: a
+    model shot beside a flat one, or a belt whose photo is mostly backdrop, differ in colour for no reason, and a
+    looser veto undid 14 good pairs in 22 (test-tools/diffmatch.py, November 2026). It only ever takes listings
+    out: the words made the item, the photo can only say it went too far."""
+    known = [x for x in ids if telling(x)]
+    def misfit(x):
+        alike = [y for y in known if y != x and same_shot(x, y)]
+        return bool(alike) and all(math.dist(PHOTO[x][1], PHOTO[y][1]) >= FAR for y in alike)
+    if len(known) == 2 and misfit(known[0]):
+        return ids[:1]                                 # two photos, two colours: which is which is not known
+    return [x for x in ids if not telling(x) or len(known) < 3 or not misfit(x)]
+
+
+def title_words(it):
+    """A title's words without its brand's (so "Kapital 96 Yarns Heel Bandana Socks - Blue" at one store and
+    "KAPITAL 96 YARNS HEEL BANDANA SOCKS BLUE" at another are the same words)."""
+    skip = set(re.findall(r"[a-z0-9]+", (it.get("brand") or "").lower())) | {"mens", "womens", "men", "women"}
+    return frozenset(w for w in re.findall(r"[a-z0-9]{2,}", re.sub(r"['’]s\b", "", (it.get("title") or "").lower()))
+                     if w not in skip)
+
+
+UPPER = {"tops", "outerwear", "dresses"}
+
+
+def clash(a, b):
+    """Two listings no photo should put together: a shoe and anything else, or a top (a jacket, a dress) and
+    trousers. A collaboration's code and its plain black photos are shared by the track top and the track pants;
+    other kinds are not compared, since stores file one jacket under outerwear and tops."""
+    ka, kb = a.get("kind"), b.get("kind")
+    if (ka == "footwear") != (kb == "footwear") and ka and kb:
+        return True
+    return (ka == "bottoms" and kb in UPPER) or (kb == "bottoms" and ka in UPPER)
+
+
+def attach(products, by_code, listings, info):
+    """Listings that a shared code ties to exact items but whose words could not place them (no colour named, or one
+    no word list holds: "Oatmeal / Umeboshi"), placed by their photo: into the item sharing the code whose photos
+    are close in colour (PLACE, by the median) when every other such item's are far (CLEAR). Never into an item that
+    already has a listing from the same store, never across brands or between shoes and clothes, and never above
+    three times the item's full price. It only ever adds: an item the words made stays as it was."""
+    item_of = {x: n for n, (ids, *_) in enumerate(products) for x in ids}
+    wanted = collections.defaultdict(set)              # loose listing -> the items its codes share
+    for members in by_code.values():
+        if not 1 < len(members) <= 60:
+            continue
+        items = {item_of[x] for x in members if x in item_of}
+        if not items:
+            continue
+        for x in members:
+            if x not in item_of and telling(x):
+                wanted[x] |= items
+    added = collections.defaultdict(list)
+    for x, items in wanted.items():
+        open_to = {}
+        for n in items:
+            ids = products[n][0]
+            if any(store_of(y) == store_of(x) for y in ids) or not compatible(info[x][0], info[ids[0]][0]):
+                continue
+            if any(clash(listings[x], listings[y]) for y in ids):
+                continue
+            open_to[n] = ids
+        n = placed(x, open_to)
+        # and clearly not one of the items its store is in already: the code's other colourways
+        if n is not None and not any(photo_gap(x, products[m][0], nearest=True) is not None and
+                                     photo_gap(x, products[m][0], nearest=True) < CLEAR for m in items if m not in open_to):
+            full = [v for v in (full_usd(listings[y]) for y in products[n][0] + [x]) if v]
+            if not full or max(full) <= 3 * min(full):
+                added[n].append(x)
+    out = []
+    for n, (ids, keys, b, named) in enumerate(products):
+        more = [x for x in added.get(n, []) if all(store_of(x) != store_of(y) for y in added[n] if y != x)]
+        out.append((sorted(ids + more), keys, b, named | frozenset().union(*(info[x][1] for x in more))))
+    return out
 
 
 def kind_parts(ids, listings):
@@ -249,6 +370,16 @@ def one_design(ids, listings, info):
     return True
 
 
+# Words left over in a colourway's title that still don't name its colour: what it is, what it is made of, who it
+# is for, and the Italian of the boutiques that title in it.
+NOT_A_COLOUR = set("""mens womens men women unisex kids x and in with the of for by new
+    sneaker sneakers shoe shoes trainer trainers boot boots jean jeans pant pants trouser trousers shirt tee top
+    sweater hoodie jacket coat bag hat cap dress skirt shorts
+    leather suede cotton wool cashmere silk nylon denim mesh technical fabric stretch canvas
+    maglia felpa giacca giubbino piumino cappotto pantalone pantaloni gonna abito camicia borsa tracolla scarpe
+    stivali stivale stivaletto sneakers mocassino cappello cintura pelliccia""".split())
+
+
 def colour_label(ids, listings, info, others=()):
     """What to call a colourway: the colours its listings name; else the words of its title that the design's other
     colourways' titles don't have ("Bold Berry"); else where it is sold. others: those other colourways."""
@@ -258,8 +389,9 @@ def colour_label(ids, listings, info, others=()):
         return " / ".join(sorted(c.title() for c, n in named.items() if n == top))
     it = listings[ids[0]]
     theirs = {w for u in others for x in u for w in re.findall(r"[a-z0-9]+", (listings[x].get("title") or "").lower())}
-    skip = set(re.findall(r"[a-z0-9]+", (it.get("brand") or "").lower())) | {"mens", "womens", "men", "women", "unisex"}
-    own = [w for w in re.findall(r"[A-Za-z0-9]+", it.get("title") or "") if w.lower() not in theirs and w.lower() not in skip]
+    skip = set(re.findall(r"[a-z0-9]+", (it.get("brand") or "").lower())) | NOT_A_COLOUR
+    own = [w for w in re.findall(r"[A-Za-z]{2,}", re.sub(r"['’]s", "", it.get("title") or ""))
+           if w.lower() not in theirs and w.lower() not in skip]
     if own and others:
         return " ".join(own[:4]).title()
     return "At " + it.get("store_name", store_of(ids[0]))
@@ -274,14 +406,26 @@ def full_usd(it):
 
 
 INFO = {}   # listing -> (brand key, colours, what makes it the same listing twice): filled by group()
+PHOTO = {}  # listing -> its photo's (shape hash, Lab colour, share it fills), where read (imagesig.py): filled by group()
+# The photo's colour, measured against pairs whose answer is known (test-tools/calibrate.py, November 2026): two
+# listings of one colourway at different stores are mostly under 11 apart (median 7), two colourways of one code
+# mostly over 10 (median 25). So a listing that names no colour joins a colourway only when its photo is close to
+# that one (PLACE) and far from every other (CLEAR); a listing whose photo is FAR from the rest of its colourway,
+# against photos framed alike (SAME_SHOT), is another colour whatever the title says; and colourways of one design
+# merge on a colour word only when their photos agree (AGREE).
+PLACE, CLEAR, FAR, AGREE, SAME_SHOT = 6, 20, 50, 12, 10
+FILLS = 0.2                # a photo the item fills less of than this (a belt, a ring on white) says nothing about colour
 
 
-def group(listings):
+def group(listings, look=None):
     """listings: id -> item (title, brand, url, img, store...). Returns (products, models).
     products: the exact items at two or more stores, each (ids, codes, brand key, colours).
     models: designs sold in two or more colourways, at two or more stores in all, each (colourways, codes, brand
-    key), a colourway being a list of ids (an exact item, or one store's listing that matched nothing)."""
+    key), a colourway being a list of ids (an exact item, or one store's listing that matched nothing).
+    look: a function from listing ids to their photos' (shape, colour), for the listings that share a code with
+    another store's (imagesig.signatures through build.match_products); without it, colours come from words only."""
     info, by_code, by_image, mixed = INFO, collections.defaultdict(list), collections.defaultdict(list), {}
+    by_title = collections.defaultdict(list)
     info.clear()
     for lid, it in listings.items():
         b = brand_key(it.get("brand") or it.get("store_name"))
@@ -301,7 +445,18 @@ def group(listings):
             by_code[c].append(lid)
         if name:
             by_image[name].append(lid)
+        words = title_words(it)
+        if len(words - set(COLOURS)) >= 3:         # "Wool sweater" names too many things
+            by_title[(b, words)].append(lid)
 
+    # Same brand, the same title word for word (its colour words too), at stores that list it once: a title alone
+    # never makes a match, but with photos of one colour (PLACE) at much the same full price (1.5 times), it does.
+    by_title = {k: v for k, v in by_title.items() if 1 < len(v) <= 12 and len({store_of(x) for x in v}) > 1}
+    PHOTO.clear()
+    if look:                                           # the photos of listings a code or a title ties to another store's
+        need = {x for members in by_code.values() if 1 < len(members) <= 60 and len({store_of(y) for y in members}) > 1
+                for x in members} | {x for v in by_title.values() for x in v}
+        PHOTO.update(look(need))
     g, fam = Groups(), Groups()                        # exact items; designs (every colour of one)
     keys_of = collections.defaultdict(set)             # listing -> the codes it was joined by
     fam_keys = collections.defaultdict(set)            # listing -> the codes that put it in a design
@@ -326,6 +481,15 @@ def group(listings):
                             fam.join(ids[0], x)
                         for x in ids:
                             fam_keys[x].add(key)
+    for members in by_title.values():
+        per_store = collections.Counter(store_of(x) for x in members)
+        ids = [x for x in members if per_store[store_of(x)] == 1 and telling(x)]
+        for n, a in enumerate(ids):
+            for b in ids[n + 1:]:
+                fa, fb = full_usd(listings[a]), full_usd(listings[b])
+                if math.dist(PHOTO[a][1], PHOTO[b][1]) <= PLACE and fa and fb and max(fa, fb) <= 1.5 * min(fa, fb) \
+                        and not clash(listings[a], listings[b]):
+                    g.join(a, b)
 
     comps = collections.defaultdict(list)
     for lid in g.up:
@@ -335,7 +499,7 @@ def group(listings):
         # Joining codes and pictures can chain two colours together through a listing that names neither:
         # split again by colour, as for a single code.
         for p in (q for part in colour_parts(ids, info) for q in kind_parts(part, listings)):
-            p = one_each(p, info)                      # a code and a picture can each bring in a different one
+            p = veto(one_each(p, info))                # a code and a picture can each bring in a different one
             stores = {store_of(x) for x in p}
             if len(stores) < 2 or len(stores) > BIG:
                 continue
@@ -346,6 +510,8 @@ def group(listings):
                 continue
             products.append((sorted(p), set().union(*(keys_of[x] for x in p)), info[p[0]][0],
                              frozenset().union(*(info[x][1] for x in p))))
+    if PHOTO:
+        products = attach(products, by_code, listings, info)
     return designs(products, fam, fam_keys, listings, info)
 
 
@@ -370,16 +536,33 @@ def designs(products, fam, fam_keys, listings, info):
                 n = item_of.get(x)
                 key = ("item", n) if n is not None else ("colour", info[x][1]) if info[x][1] else ("one", x)
                 units.setdefault(key, []).append(x)
-            # several products naming one colour: one colourway
+            # several products naming one colour: one colourway, if their photos agree (on words alone, two in
+            # five such merges were wrong: a navy and a royal-blue polo, a "black" sweater that is green)
             by_colour = collections.defaultdict(list)
             for key, u in list(units.items()):
                 if key[0] != "one":
                     c = products[key[1]][3] if key[0] == "item" else key[1]
                     if c:
                         by_colour[c].append(key)
+            stores_of = lambda u: {store_of(y) for y in u}
             for c, keys in by_colour.items():
                 if len(keys) > 1:
-                    units[("colour", c)] = [x for k in keys for x in units.pop(k)]
+                    first, rest = keys[0], keys[1:]
+                    for k in rest:
+                        # never two colourways that share a store: its two listings would cancel each other out
+                        if stores_of(units[first]) & stores_of(units[k]):
+                            continue
+                        gaps = [g for x in units[k] for g in [photo_gap(x, units[first])] if g is not None]
+                        if gaps and max(gaps) <= AGREE:
+                            units[first] += units.pop(k)
+            # a listing naming no colour joins the colourway its photo is clearly of, if its store isn't in it yet
+            for key in [k for k in units if k[0] == "one"]:
+                x = key[1]
+                into = placed(x, {k: u for k, u in units.items() if k != key and store_of(x) not in stores_of(u)
+                                  and not any(clash(listings[x], listings[y]) for y in u)})
+                if into is not None and not any(photo_gap(x, u, nearest=True) is not None and photo_gap(x, u, nearest=True) < CLEAR
+                                                for k, u in units.items() if k not in (key, into) and store_of(x) in stores_of(u)):
+                    units[into].append(units.pop(key)[0])
             colourways = []
             for key, u in units.items():
                 if key[0] == "colour":                 # a store with two different listings in one colour can't say which
@@ -468,7 +651,7 @@ def past_offers(state, products, current, rates):
     return out
 
 
-def match(listings, state, rates, names):
+def match(listings, state, rates, names, look=None):
     """listings: id -> item, everything listed or in a catalogue this run. Writes docs/matches/ and returns, per
     matched listing, what build.py puts on it: `m` and `mn`, its exact item and how many stores carry that; `f`,
     `fc` and `fs`, its design, how many colourways that has and how many stores carry any of them (the page's
@@ -477,7 +660,7 @@ def match(listings, state, rates, names):
     docs/matches/<n>.json holds, under a design's id (or an exact item's, for one in a single colour),
     {"colours": [{"m", "label", "img", "offers": [...], "past": [...]}, ...]}: each colourway with every store's
     offer of it, cheapest first, and the stores that sold it before."""
-    products, models = group(listings)
+    products, models = group(listings, look)
     past = past_offers(state, products, listings, rates)
     item_of = {x: n for n, (ids, *_) in enumerate(products) for x in ids}
     files, marks = [{} for _ in range(MATCH_FILES)], {}
@@ -509,6 +692,11 @@ def match(listings, state, rates, names):
         f = product_id(["design " + min(x for u in colourways for x in u)])
         entries = sorted((colourway(u, [v for v in colourways if v is not u]) for u in colourways),
                          key=lambda c: c["offers"][0].get("usd") or 1e12)
+        # two colourways under one name (stores that name no colour, a colour each spells alike): say whose
+        seen = collections.Counter(c["label"] for c in entries)
+        for c in entries:
+            if seen[c["label"]] > 1 and not c["label"].startswith("At "):
+                c["label"] += " · " + c["offers"][0]["store_name"]
         stores = len({store_of(x) for u in colourways for x in u})
         for u in colourways:
             in_model.update(u)

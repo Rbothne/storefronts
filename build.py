@@ -26,6 +26,7 @@ import urllib.request
 from urllib.parse import unquote, urlparse
 
 import history
+import imagesig
 import listings
 import matching
 
@@ -223,9 +224,9 @@ def shopify_feed(host, path, max_pages):
             return
         if not products:
             return
+        # Not "fewer than 250 means the last page": some feeds leave out a few products a page (The Outnet serves
+        # 245-249), so only an empty page ends the feed. That costs one request per store read.
         yield from products
-        if len(products) < 250:
-            return
 
 
 def served_currency(host):
@@ -757,6 +758,7 @@ def write_brand_files(marks=None):
 
 
 MATCH_FIELDS = ("m", "mn", "f", "fc", "fs")
+PHOTOS_PER_RUN = 6000      # new photos read per build for matching (about 3 minutes); the rest wait for the next run
 
 
 def match_products(items, state, rates, stores):
@@ -772,13 +774,21 @@ def match_products(items, state, rates, stores):
             it.pop(k, None)
         if it.get("price") is not None:
             every[it["id"]] = it                       # the list's copy wins: it is the one shown
-    marks = matching.match(every, state, rates, {h: s.get("name", h) for h, s in stores.items()})
+    cache, read = imagesig.load_cache(), [0]
+
+    def look(ids):
+        """The photos matching asks for, from the cache or Shopify's image CDN (imagesig.py)."""
+        found, read[0] = imagesig.signatures([every[x].get("img") for x in ids], cache, limit=PHOTOS_PER_RUN)
+        return {x: found[k] for x in ids for k in [imagesig.photo_key(every[x].get("img"))] if k in found}
+
+    marks = matching.match(every, state, rates, {h: s.get("name", h) for h, s in stores.items()}, look)
+    imagesig.save_cache(cache)
     for it in items:
         if it["id"] in marks:
             it.update(marks[it["id"]])
     print(f"matched {len({v['m'] for v in marks.values() if 'm' in v})} items across stores and "
           f"{len({v['f'] for v in marks.values() if 'f' in v})} designs in several colourways ({len(marks)} listings) "
-          f"in {time.time() - t:.0f} s", flush=True)
+          f"in {time.time() - t:.0f} s ({read[0]} photos read)", flush=True)
     return marks
 
 

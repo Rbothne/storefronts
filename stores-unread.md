@@ -8,6 +8,30 @@ probed two or three times over, and a verdict here is a probe you do not need to
 Keep it current. A store that gets read moves out of the tables; a store that turns out to be readable gets its
 finding corrected rather than a second row underneath.
 
+## Read since November 2026 by setting robots.txt aside
+
+The owner decided that a store's `robots.txt` no longer has the last word where it shuts out the very route the
+store's own pages use. Such a store is marked `"robots": "ignore"` in `stores.json` (`permitted()` in
+`listings.py`) and read at the same pace and with the same User-Agent as every other store; Shopify feeds were
+never checked against robots.txt by the code, only by choice. Moved out of the tables below:
+
+- **The Outnet** — it moved to Shopify (its products carry a `MIGRATED_20261117` tag, and
+  `www.theoutnet.com/products/<handle>` answers with the real page). Its own host's `products.json` is 404; the
+  feed on `wcacjh-wq.myshopify.com` (`Disallow: /`) serves the whole outlet in GBP: 16,113 products in 781
+  brands within the 65-page cap, nearly all marked down. Its pages hold 245-249 products each, which is why
+  `shopify_feed()` now reads to an empty page rather than stopping at the first page under 250.
+- **Buck Mason** — the feed on `buck-mason-usa.myshopify.com`: 1,064 products, nothing on sale that day.
+- **Acne Studios** (was read, 28 items a category) — `?start=0&sz=96`: 560 products.
+- **ba&sh** — its tiles read with `via: tiles`, paged `?start={start}&sz=60`: 616 products (no "was" prices in
+  the tiles; markdowns show as tracked drops).
+- **PacSun** — `?start={start}&sz=96` on the two sale listings gives 117 tiles a page instead of 15 (1,105
+  products before it stopped answering). **It turned this machine away (HTTP 403 on every page, page one
+  included) after about 16 pages of 2.4 MB a second and a half apart**, so it is read with an 8-second delay
+  and 10 pages a listing. Whether that is slow enough has not been seen yet: check its status line.
+
+Looked at and left: Ecco and Blue Nile ignore their paging parameter (page two is page one again), and Foot
+Locker and Champs Sports do too (`currentPage=1` serves page 1), so setting robots.txt aside gains nothing there.
+
 ## No store in here is finished
 
 A verdict below records **a route that was tried**, never a store that is beyond reading. Both of the hardest
@@ -133,9 +157,8 @@ The leads the sweep did turn up, in the order I would take them:
    plain `GET` given the `account_id` and `auth_key` a storefront's page or script bundle carries. Four of
    those stores are the Gap group, which is a great deal of catalogue for one integration, and the reader would
    be a sibling of `read_algolia` -- the same `fields`/`title`/`product_url` description over a different host.
-2. **Constructor, on three** — Under Armour, Journeys, The Outnet. Same shape (`cnstrc.com`, a public key).
-   The Outnet matters twice over: its Shopify feed is robots-disallowed, so Constructor may be the only
-   honest route into it.
+2. **Constructor, on two** — Under Armour, Journeys (`cnstrc.com`, a public key). The Outnet, the third, is
+   read through its Shopify feed now.
 3. **Searchspring, on Mizuno.** Same again, smaller prize.
 4. **Ecco specifically** renders an Algolia `InstantSearchInitialResults` block naming the index
    `prod_US_en-US_USD_Products`, and has a `_discount_desc` replica — a sorted-by-discount index, which no
@@ -183,7 +206,6 @@ Every one of these describes a route, not a store. None of them means the store 
 
 | store | host | verdict | what was found |
 |---|---|---|---|
-| Buck Mason | `buckmason.com` | feed | Allowed alternative, already how the site is read today: https://www.buckmason.com/sitemap-0.xml lists 1,303 /products/ pages and 423 /collections/ pages. www.buckmason.com/robots.txt disallows every address with a query string except ?variant=. buckmason.com/products.json itself **Re-swept Nov 2026:** products.json on buck-mason-usa.myshopify.com |
 | Children of the Discordance | `childrenofthediscordance.com` | nothing | The listing address exists (https://childrenofthediscordance.com/item and /item?brand_id=1) but both say there are no items at the moment, so no product was seen. Worth re-checking when the shop is stocked: it should then read like Hender Scheme. **Re-swept Nov 2026:** page served, nothing recognised in the home page |
 | Geeks Rule | `geeksrule.jp` | nothing | The site is a WordPress page with a contact link and nothing else; no shop. /products.json is 404 and the WooCommerce Store API route does not exist (rest_no_route). No other store host is linked. **Re-swept Nov 2026:** page served, nothing recognised in the home page |
 | Jazzy Sport Shimokitazawa | `jsshimokita.theshop.jp` | pages | I stopped at three requests after reading that. 1,302 pages is also too many for one request each. — `https://jsshimokita.theshop.jp/sitemap.xml` **Re-swept Nov 2026:** page served, nothing recognised in the home page |
@@ -228,7 +250,6 @@ Every one of these describes a route, not a store. None of them means the store 
 | Onitsuka Tiger | `www.onitsukatiger.com` | nothing | /us/en-us/graphql answers 200 but {"data":{"products":{"total_count":0,"items":[]}}} for three product queries (empty search, price filter, search 'mexico'). The sitemap index (https://www.onitsukatiger.com/sitemaps/sitemap-index.xml, 41 files) has no US product sitemap, and the **Re-swept Nov 2026:** page served, nothing recognised in the home page |
 | Saks Fifth Avenue | `www.saksfifthavenue.com` | guarded | robots.txt 403 DataDome captcha; home page 403 DataDome captcha. First probe: /products.json answered 403. **Re-swept Nov 2026:** page refused again (403) |
 | Stone Island | `www.stoneisland.com` | guarded | Home page: 403 (Akamai). robots.txt was served. **Re-swept Nov 2026:** page refused again (403) |
-| The Outnet | `www.theoutnet.com` | guarded, robots | a Shopify feed exists on wcacjh-wq.myshopify.com but that host's robots.txt is Disallow: / — `https://wcacjh-wq.myshopify.com/products.json?limit=1` **Re-swept Nov 2026:** products.json on wcacjh-wq.myshopify.com; uses constructor |
 | Yoshida & Co. | `www.yoshidakaban.com` | guarded | robots.txt and home page both: 403 'access forbidden' from the site's Varnish front (a flat refusal with a Japanese notice, possibly by region). Not retried. **Re-swept Nov 2026:** page refused again (403) |
 | Saint Laurent | `www.ysl.com` | guarded | Home page: 403 'Access Denied' (Akamai). robots.txt was served. **Re-swept Nov 2026:** page refused again (403) |
 
@@ -241,7 +262,6 @@ Mall and department stores, and alternative hosts found for stores already on th
 |---|---|---|---|
 | Alpaca Tinkuy | `alpacatinkuy.com` | wrong-address | alpacatinkuy.com does not resolve. The mall directory lists Alpaca Tinkuy as a Level 2 kiosk with no website or social link, and a web search found no shop site for it. **Re-swept Nov 2026:** page refused again (0) |
 | Athleta | `athleta.gap.com` | no route yet | https://athleta.gap.com/browse/new/all-new-arrivals?cid=1006482 embeds the first styles of a category (styleId, styleName, effectivePrice, regularPrice, percentageOff, inventoryStatus per colour) but the rest load in the browser from api.gap.com; adding &pageId=1 returned the sam **Re-swept Nov 2026:** uses bloomreach; page carries app-router payload **Read Nov 2026:** same platform as Gap and Old Navy, but its rendered home page exposes no category links at all and a Gap category id renders 2 price strings. It wants its own cids, from a division or nav page nobody has rendered yet |
-| ba&sh | `ba-sh.com` | no route yet | Only the first page of a category was readable: https://ba-sh.com/us/dresses/ shows 63 of 237 products with prices, but robots.txt disallows the paging parameters (*sz*, *?start=*) and /on/demandware.store/, so page 2 was not requested. /products.json is 404. **Re-swept Nov 2026:** page carries tiles with ids **Checked again Nov 2026:** US and FR listing pages served (660 KB, 175 KB), zero price strings in either; grid built in the browser |
 | Banana Republic | `bananarepublic.gap.com` | read, harvest | https://bananarepublic.gap.com/browse/men/mens-sale?cid=26219 embeds the first styles of a category (styleId, styleName, effectivePrice, regularPrice, percentageOff, inventoryStatus per colour) but the rest load in the browser from api.gap.com; adding &pageId=1 returned the same **Re-swept Nov 2026:** uses bloomreach; page carries app-router payload **Read Nov 2026:** same platform as Gap, but its grids render 10-29 products a page and it barely discounts: 91 harvested, 5 listed. Five of its ten categories brought nothing the others had not already |
 | BYLT | `bylt-apparel.myshopify.com` | feed | byltbasics.com/products.json is 404 (headless). myshopify name found in the home page source. 204 of 248 products carry a higher compare_at_price. Product page: https://byltbasics.com/products/<handle>. — `https://bylt-apparel.myshopify.com/products.json?limit=250&page=N` **Re-swept Nov 2026:** products.json on bylt-apparel.myshopify.com |
 | Hive & Colony | `hiveandcolony.com` | no route yet | A made-to-measure tailor with showrooms. hiveandcolony.com redirects to www.hiveandcolony.com; /products.json is 404 and https://www.hiveandcolony.com/collection/shoes shows a handful of styles with no listing data or sitemap entry in robots.txt. Nothing to follow for sales. **Re-swept Nov 2026:** page carries app-router payload **Checked again Nov 2026:** /collection/* pages served (188 KB), zero price strings; grid built in the browser |
@@ -298,7 +318,6 @@ Mall and department stores, and alternative hosts found for stores already on th
 | Michael Kors | `www.michaelkors.com` | guarded | robots.txt 200; home page 403 Akamai 'Access Denied'. First probe: /products.json answered 403. **Re-swept Nov 2026:** page refused again (403) |
 | Montblanc | `www.montblanc.com` | nothing | 4 price strings a page; no product list served — `https://www.montblanc.com/en-us/sitemap-customSiteMapProduct_MontblancRNA_1.xml` **Re-swept Nov 2026:** page refused again (0) |
 | Oakley | `www.oakley.com` | guarded | robots.txt 200; home page 403 Akamai 'Access Denied'. First probe: /products.json answered 403. **Re-swept Nov 2026:** page refused again (403) |
-| PacSun | `www.pacsun.com` | nothing | Only the first page of a category was readable: https://www.pacsun.com/womens/tops/ shows 12-15 of 3,375 products; robots.txt disallows *sz=* and Search-ShowAjax, so paging was not requested. **Re-swept Nov 2026:** page served, nothing recognised in the home page |
 | Peter Millar | `www.petermillar.com` | guarded | robots.txt 403 Imperva/Incapsula block; home page 403 Imperva/Incapsula block. First probe: /products.json answered 403. **Re-swept Nov 2026:** page refused again (403) |
 | Primark | `www.primark.com` | guarded | robots.txt 200; home page 403 'Planned maintenance' block page. Primark does not sell online in the US in any case. First probe: /products.json answered 403. **Re-swept Nov 2026:** page refused again (403) |
 | Ralph Lauren | `www.ralphlauren.com` | guarded | robots.txt 200; home page 403 (captcha page). First probe: /products.json answered 403. **Re-swept Nov 2026:** page refused again (307) |
@@ -331,8 +350,7 @@ This is a work queue, not a list of defeats. Every item says the next thing to t
    eighty lines and opened two of the hardest stores on the site. Bloomreach (`dxpapi.com`) is the same shape
    and the same kind of host, and the Gap group alone — Gap, Old Navy, Banana Republic, Athleta — is four
    stores off one integration, with Ecco, Charles Tyrwhitt, Tommy Bahama and Indochino behind it. Constructor
-   (`cnstrc.com`) brings Under Armour, Journeys and The Outnet, and is the only honest route left into The
-   Outnet, whose Shopify feed is `Disallow: /`. Find the account id and key the way the Algolia ones were
+   (`cnstrc.com`) brings Under Armour and Journeys (The Outnet is read through its Shopify feed now). Find the account id and key the way the Algolia ones were
    found: the page first, then the script bundles it loads, then one browser page-load with its requests
    logged. This is the highest-yield work in the file by a wide margin.
 2. **Athleta** is the one of the four Gap storefronts still unread. Gap, Old Navy and Banana Republic are all
@@ -342,7 +360,7 @@ This is a work queue, not a list of defeats. Every item says the next thing to t
    take its cids, and it is a copy of the Old Navy entry. Old Navy also shows what the cids are worth -- its
    two deals categories are most of its 1,243 products, so it is worth hunting the equivalent on any store
    read this way.
-3. **Mango, ba&sh and Hive & Colony** render their grids in the browser and price nothing for a plain request,
+3. **Mango and Hive & Colony** render their grids in the browser and price nothing for a plain request,
    so they are harvest candidates: a listing path each and a `via` that matches what the browser leaves behind.
 4. **Bally** needs a decision, not a route: its `products.json` answers on its own host, robots-allowed, 56
    products with real compare-at prices, and every one of 208 variants reporting out of stock. If `build.py`
