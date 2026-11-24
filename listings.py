@@ -447,6 +447,12 @@ def split_prices(fields):
     if not now:
         now, was = was, []
     price = min(now)
+    if not was:
+        # a plain "price" beside a "discountPrice" (or "salePrice", "finalPrice") is the one before the cut:
+        # Arc'teryx's grid gives {"price": 650, "discountPrice": 520} and names no original price at all
+        parent = lambda p: p.rsplit(".", 1)[0] if "." in p else ""
+        cut = {parent(p) for p, n in fields if NOW_KEY.search(p.rsplit(".", 1)[-1]) and n == price}
+        was = [n for p, n in fields if p.rsplit(".", 1)[-1].lower() == "price" and parent(p) in cut and n > price]
     return price, (max(was) if was and max(was) > price else None)
 
 

@@ -27,6 +27,34 @@ never checked against robots.txt by the code, only by choice. Moved out of the t
 - **PacSun** — read for one night, then taken out: below the site's tier (a mall chain), and it refused every
   page, page one included, both from this machine (after ~16 pages of 2.4 MB) and from GitHub's. Its sale
   listings do page with `?start={start}&sz=96` (117 tiles a page, `via: tiles`) if it is ever wanted back.
+- **Vince** (was read, ~27 items a category: its robots.txt disallows `start=`) — `?start={start}&sz=96`:
+  404 → about 2,400 products.
+- **Hobbs** (was read, one page a category) — its own next-page form, `?start={start}&startPageNumber={n}&sz=60`
+  with `"size": 56` (each page holds 56 products and four editorial tiles): 751 → about 4,000.
+
+Category sweep, late November 2026 (each listing read page by page and counted against what the store says it
+holds; only the store's own listing addresses used):
+
+- **ba&sh** fell to 13 products: `/us/clothing/` and `/us/shoes/` became landing pages with no grid. Now read
+  by its 15 leaf categories (681).
+- **Tory Burch** serves the first 30-60 of a category in the page and the rest from an API that needs its
+  key, so it is read by its 56 leaf categories: 274 → 1,089. `?start=` and `?page=` are ignored.
+- **Burberry** pages with `?offset={start}` (20 a page): its departments instead of 19 sub-pages, 263 → 1,173.
+- **Arc'teryx**: leaf categories (the department page stops at 48), 94 → about 470; its grid's
+  `{"price": 650, "discountPrice": 520}` now reads as a markdown (`split_prices`).
+- **Prada** by its 93 leaf categories (department pages stop early): 625 → 1,723, women's ready-to-wear and
+  shoes included. **Loewe** + small leather goods, women's accessories and jewellery, sunglasses, lifestyle:
+  1,167 → 1,587 (it sells no men's ready-to-wear on its US site). **Chloé** + ready-to-wear, shoes, bags, small
+  leather goods, eyewear, kids: 971 → 1,936. **Boss** + its full-price departments: 1,504 → about 4,800.
+  **Palm Angels** + its full range: 451 → 750. **Self Edge** by product type, paged: 427 → 1,317. **Born x
+  Raised** every collection: 36 → 60.
+- **END.** 38 more designer brand collections (Stone Island, Moncler, CDG, Margiela, Acne, A.P.C., Our Legacy,
+  Rick Owens, C.P. Company, Balenciaga...), one to a few requests each.
+- Left as they are: **Kendra Scott** and **Salomon** ignore every paging form tried; **Abercrombie, Hollister,
+  Loft** read fully from this machine (305 / 955 products) but GitHub's machine now gets pages with no products;
+  **Yeti** answers 403 to GitHub on the bare first page as well as the paged one (needs the harvest, or to go).
+  Lower-tier stores read only through their sale pages (Talbots, Loft, J.Jill, Khaadi, Johnston & Murphy,
+  Calzedonia, Intimissimi, Cotton On) were not widened.
 
 Looked at and left: Ecco and Blue Nile ignore their paging parameter (page two is page one again), and Foot
 Locker and Champs Sports do too (`currentPage=1` serves page 1), so setting robots.txt aside gains nothing there.
