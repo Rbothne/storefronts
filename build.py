@@ -133,9 +133,15 @@ NOT_A_PRODUCT = re.compile(r"\b(shipping|package|order|delivery) (protection|ins
                            r"|\be-?gift ?cards?\b|\bgift ?cards?\b|\bgift (voucher|certificate)\b|\bdonation\b|\bswatch(es)? sample", re.I)
 
 
-def shopify_item(host, p, cents=False):
-    """Normalise one product from products.json (dollars) or /products/x.js (cents)."""
-    if NOT_A_PRODUCT.search(p.get("title") or "") or (p.get("product_type") or "").lower() in ("gift card", "giftcard", "insurance"):
+def shopify_item(host, p, cents=False, locale=""):
+    """Normalise one product from products.json (dollars) or /products/x.js (cents). locale: the path the store
+    serves its English pages under ("/en"), for the product's address."""
+    ptype = (p.get("product_type") or p.get("type") or "").lower().replace("_", " ")
+    if NOT_A_PRODUCT.search(p.get("title") or "") or ptype in ("gift card", "giftcard", "insurance"):
+        return None
+    # a page of a runway or lookbook, not a product: The Row's ":: Fall 2025 :: Look 12" ("Product Look", at a
+    # placeholder $99,999), Isabel Marant's "Look 28 [S27]", Noah's "Lookbook - SS20"
+    if ptype in ("look", "product look", "lookbook") or re.match(r"\W*look ?book\b", p.get("title") or "", re.I):
         return None
     div = 100.0 if cents else 1.0
     variants = p.get("variants") or []
@@ -165,7 +171,7 @@ def shopify_item(host, p, cents=False):
         "store": host,
         "title": p.get("title", ""),
         "brand": p.get("vendor", ""),
-        "url": f"https://{host}/products/{p.get('handle')}",
+        "url": f"https://{host}{locale}/products/{p.get('handle')}",
         "img": img,
         "price": round(price, 2),
         "was": round(was, 2) if off else None,
@@ -174,6 +180,7 @@ def shopify_item(host, p, cents=False):
         "sizes": sizes[:14],
         "sizes_all": sizes_all,  # used to work out the size scale, then dropped
         "tags": [],
+        "raw_tags": tags,        # read for the store's own category (category_tags), then dropped
         # products.json calls it product_type, /products/x.js calls it type
         "ptype": p.get("product_type") or p.get("type") or "",
         "published": str(p.get("published_at") or "")[:10],   # used for tracking, then dropped
@@ -437,6 +444,75 @@ RULES = [(re.compile(r"\b(%s)\b" % rx, re.I), cat) for rx, cat in [
 ]]
 
 
+# Second pass, for an item none of the RULES placed: looser words, then the RULES again on loosened text, then
+# the store's own category tags. Because it only ever sees items that would otherwise land in "Other", it cannot
+# move anything the rules above already sort -- which is what lets it carry words too loose for the first pass
+# ("short" there would take every "Short Sleeve Shirt" for shorts; here the shirt is long gone).
+FALLBACK = [(re.compile(r"\b(%s)\b" % rx, re.I), cat) for rx, cat in [
+    (r"short ?sleeves?d?|long ?sleeves?d?|ss tees?|halfzips?|quarterzips?|jumpers?|turtlenecks?|mock ?necks?|crews?"
+     r"|corsets?|camis?|camisoles?|cardis?|kurt(a|i)s?|tunics?|button[- ]ups?|wovens|cut ?(&|and)? ?sew(n)?|pinnies"
+     r"|base ?layers?", "clothing/tops"),
+    (r"kaftans?|caftans?|abayas?|gowns?|overalls?|dungarees?", "clothing/dresses"),
+    (r"\w+coats?|shackets?|cabans?|capes?|bodywarmers?|body ?warmers?|pellicc(ia|e)", "clothing/outerwear"),
+    (r"trainers?|derb(y|ies)|brogues?|moccasins?|mocs?|slides?|chukkas?|mary ?janes?|slingbacks?|wingtips?"
+     r"|slip[- ]ons?|air (jordan|max|force)|jordan \d+|dunks?|yeezy|samba|gazelle|spezial|chuck (taylor|70)"
+     r"|old skool|gel-\w+", "clothing/footwear"),
+    # before "short": a "Short Snake Chain" is a necklace
+    (r"\w+bags?|wristlets?|pochettes?|crossbody|hobos?|visors?|headbands?|hair ?clips?|claw clips?|scrunchies?"
+     r"|pendants?|charms?|anklets?|brooch(es)?|cufflinks?|chains?|cuffs?|pins?|pocket squares?|bow ?ties?|neckties?"
+     r"|stoles?|shawls?|wraps?|umbrellas?|lanyards?|key ?rings?|card ?cases?|purses?|cravatt[ae]|portachiav[ei]"
+     r"|foulards?|zain[oi]|earmuffs?|satchels?|duffe?ls?|key ?fobs?", "clothing/accessories"),
+    # "short" and "tight" singular, now that nothing is left here that says "short sleeve" or "skin-tight top"
+    (r"short|jorts|skorts?|tight|panties|thongs?|hipsters?|boy ?shorts?|briefs?|boxers?|trunks?|underwear|intimates"
+     r"|chinos?|slacks|culottes?|capris?|cutoffs|kilts?|bootcut|minigonn[ae]|ciclist[ae]|jogging|long pants",
+     "clothing/bottoms"),
+    # what clothing shops sell besides clothes; "Home" already takes apothecary and personal care
+    (r"eau de (parfum|toilette|cologne)|edp|edt|parfums?|perfumes?|fragrances?|colognes?|diffusers?|room spray"
+     r"|air fresh\w*|skin ?care|serums?|moisturi[sz]ers?|lotions?|balms?|cleansers?|shampoos?|conditioners?|soaps?"
+     r"|deodorants?|sunscreens?|spf|nail polish|lipsticks?|lip (balm|oil|gloss|tint)|mascara|make-?up|cosmetics"
+     r"|beauty products?|(hand|face|body|eye) (cream|wash|oil|mask)|(hand|body|face|hair|skin|nail) ?care|\d+ ?ml|homewares?|ornaments?|tumblers?|water bottles?"
+     r"|plates?|bowls?|teapots?|vases?|lamps?|clocks?|chairs?|rugs?|vinyl|lp|piatt[oi]|vassoi[o]?|posate|candel[ae]"
+     r"|tazz[ae]|libr[oi]|tovagli\w*|bicchier[ei]|profum[oi]|fragranz[ae]|insalatiera|fruttiera|svuotatasche",
+     "home"),
+]]
+# A store whose titles are in French ("lang": "fr"). Only for those stores: "robe" is a dress in French and a
+# dressing gown in English, "pull" a sweater in one and a verb in the other.
+FRENCH = [(re.compile(r"\b(%s)\b" % rx, re.I), cat) for rx, cat in [
+    (r"casquettes?|bonnets?|chapeaux?|chaussettes?|gants|[ée]charpes?|foulards?|cravates?|porte-?cl[ée]s",
+     "clothing/accessories"),
+    (r"surchemises?|vareuses?|macs?", "clothing/outerwear"),
+    (r"chaussures?|baskets|bottines?|bottes|escarpins|sandales|mocassins|ballerines|derbies|mules", "clothing/footwear"),
+    (r"jupes?|minijupes?|pantalons?|jeans?", "clothing/bottoms"),
+    (r"manteaux?|vestes?|blousons?|parkas?|doudounes?|trench", "clothing/outerwear"),
+    (r"robes?|combinaisons?", "clothing/dresses"),
+    (r"pulls?|chemises?|chemisiers?|d[ée]bardeurs?|mailles?|sweats?|cardigans?|tops?|polos?", "clothing/tops"),
+    (r"sacs?|pochettes?|trousses?|porte-?cartes?|portefeuilles?|ceintures?|lunettes|colliers?"
+     r"|bagues?|bracelets?", "clothing/accessories"),
+    (r"boucles d['’]oreilles?", "clothing/accessories"),
+]]
+# Tags that name the store's own category: "Class: Bottoms", "cat_coats:Coats", "category::swim",
+# "Category - L0: Shirts & Button Downs", "storefront:category:Womens Shoes". The whole tag is matched.
+CATEGORY_TAG = re.compile(r"^\W*(storefront:)?(categor(y|ies)|cat|class)(?![a-z])", re.I)
+
+
+def loosen(text):
+    """Words a store has run together: "knit_sweater", "GOCap", "FSTTight" -> "knit sweater", "GO Cap", "FST Tight"."""
+    text = (text or "").replace("_", " ")
+    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
+    return re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", text)
+
+
+def category_tags(store, tags):
+    """The tags that say what the item is: the usual category tags, and any starting with one of the store's
+    own "category_tags" prefixes (Vuori's "badge::", Frame's "collection::"), or every tag for a store whose
+    tags are plain category words ("category_tags": "*": Machine-A's "Coats", "Outerwear", "RTW")."""
+    own = store.get("category_tags") or ()
+    if own == "*":
+        return [str(t) for t in tags or ()]
+    own = tuple(p.lower() for p in own)
+    return [t for t in map(str, tags or ()) if CATEGORY_TAG.match(t) or (own and t.strip().lower().startswith(own))]
+
+
 def categorize(*texts):
     """Return "group" or "group/kind" for the first text any rule matches, else None."""
     for text in texts:
@@ -446,55 +522,79 @@ def categorize(*texts):
     return None
 
 
+def categorize_more(store, ptype, title, tags):
+    """The second pass (see FALLBACK) for an item categorize() left alone."""
+    # "ptypes": a store's own product-type codes, as {"F": "clothing/footwear"}; matched on the type's first word
+    codes = store.get("ptypes") or {}
+    if (ptype or "").split()[:1] and ptype.split()[0] in codes:
+        return codes[ptype.split()[0]]
+    # "terms": a word that means something particular at this store, as {"suit": "clothing/dresses"}
+    for word, cat in (store.get("terms") or {}).items():
+        if re.search(r"\b%s\b" % re.escape(word), f"{ptype} {title}", re.I):
+            return cat
+    rules = FALLBACK + (FRENCH if store.get("lang") == "fr" else []) + RULES
+    for text in [ptype, title]:
+        text = loosen(text)
+        for rx, cat in rules:
+            if rx.search(text):
+                return cat
+    # The category tags only when they all point one way: "Coats", "Outerwear" is outerwear, but "Dresses &
+    # Skirts", or "FOOTWEAR" beside "SOCKS", says nothing about which this one is.
+    cats = {cat for tag in category_tags(store, tags) for rx, cat in rules if rx.search(loosen(tag))}
+    return cats.pop() if len(cats) == 1 else None
+
+
 # Within a kind, the finer type of a clothing item ("jeans" among bottoms). Matched against the product type and
 # the title together; first match wins, so order matters: "Denim Shorts" are shorts, "Crew Neck Tee" is a
 # T-shirt, a "Sport Coat" is a blazer. Anything unmatched has no type (the page lists it as "Other").
 TYPES = {kind: [(re.compile(r"\b(%s)\b" % rx, re.I), name) for name, rx in rules] for kind, rules in {
     "tops": [
-        ("tanks", r"tanks?|singlets?|camisoles?|(sports )?bras?|bralettes?|bodysuits?"),
+        ("tanks", r"tanks?|singlets?|camis?|camisoles?|(sports )?bras?|bralettes?|bodysuits?"),
         ("tshirts", r"t-?shirts?|tees?|(?<!['’])t"),
         ("polos", r"polos?|rugby"),
         ("knitwear", r"sweaters?|knit(s|wear|ted)?|cardigans?|jumpers?|turtlenecks?|magli(a|e|one|oni|eria)|girocollo"),
         ("sweatshirts", r"hood(s|y|ie|ies)?|hooded|sweatshirts?|sweats?|crew ?necks?|pullovers?"
-                        r"|(half|quarter|1/4|1/2)[- ]zips?|fleece|felp[ae]"),
-        ("shirts", r"\w*shirts?|shirting|button[- ]downs?|blouses?|blus[ae]|camici[ae]"),
+                        r"|(half|quarter|1/4|1/2)[- ]zips?|halfzips?|fleece|felp[ae]"),
+        ("shirts", r"\w*shirts?|shirting|button[- ](downs?|ups?)|blouses?|blus[ae]|camici[ae]|wovens|kurt(a|i)s?|tunics?"),
     ],
     "bottoms": [
-        ("shorts", r"\w*shorts?|bermudas?"),
-        ("skirts", r"skirts?|skorts?|gonn[ae]"),
+        ("shorts", r"\w*shorts?|bermudas?|jorts|swim ?trunks?(?! trousers)|ciclist[ae]"),
+        ("skirts", r"skirts?|skorts?|gonn[ae]|minigonn[ae]"),
         ("jeans", r"jeans?|denim|selvedge|selvage|boot ?cut|\d+(\.\d+)? ?oz"),
-        ("sweatpants", r"sweatpants?|joggers?|track ?pants?|sweats"),
-        ("leggings", r"leggings?|tights"),
-        ("underwear", r"boxers?|briefs?|underwear|trunks"),
-        ("trousers", r"pants?|trousers?|chinos?|slacks|cargos?|pantalon[ei]|fatigues?"),
+        ("sweatpants", r"sweatpants?|joggers?|jogging|track ?pants?|sweats"),
+        ("leggings", r"leggings?|tights?"),
+        ("underwear", r"boxers?|briefs?|underwear|trunks|panties|thongs?|hipsters?"),
+        ("trousers", r"pants?|trousers?|chinos?|slacks|cargos?|pantalon[ei]|fatigues?|capris?"),
     ],
     "outerwear": [
         ("blazers", r"blazers?|sport ?coats?|suit jackets?"),
-        ("vests", r"vests?|gilets?|waistcoats?"),
+        ("vests", r"vests?|gilets?|waistcoats?|body ?warmers?"),
         ("coats", r"\w*coats?|parkas?|trench|cappott[oi]|ponchos?"),
         ("jackets", r"jackets?|jkt|bombers?|blousons?|anoraks?|windbreakers?|puffers?|shell|overshirts?|outershirts?"
-                    r"|giacc(a|he)|giubb(ino|ini|otto|otti)|piumin[oi]"),
+                    r"|giacc(a|he)|giubb(ino|ini|otto|otti)|piumin[oi]|shackets?"),
     ],
     "dresses": [
-        ("jumpsuits", r"jumpsuits?|rompers?|playsuits?|unitards?|onesies?|overalls?"),
-        ("dresses", r"dress(es)?|gowns?|abit[oi]|vestit[oi]"),
+        ("jumpsuits", r"jumpsuits?|rompers?|playsuits?|unitards?|onesies?|overalls?|dungarees?"),
+        ("dresses", r"dress(es)?|gowns?|abit[oi]|vestit[oi]|kaftans?|caftans?|abayas?"),
     ],
     "footwear": [
         ("boots", r"boots?|stival(i|etti)"),
         ("sandals", r"sandals?|slides?|flip[- ]flops?|sandali|espadrilles?"),
-        ("loafers", r"loafers?|derb(y|ies)|oxfords?|brogues?|mocassini|moccasins?|monk ?straps?|dress shoes?"),
-        ("heels", r"heels?|pumps|flats?|ballerin[ae]|d[eé]collet[eé]s?|slingbacks?"),
+        ("loafers", r"loafers?|derb(y|ies)|oxfords?|brogues?|mocassini|moccasins?|monk ?straps?|dress shoes?"
+                    r"|wingtips?"),
+        ("heels", r"heels?|pumps|flats?|ballerin[ae]s?|d[eé]collet[eé]s?|slingbacks?"),
         ("slippers", r"slippers?|clogs?|mules?"),
-        ("sneakers", r"sneakers?|trainers?|runners?|running|(low|mid|high)[- ]tops?"),
+        ("sneakers", r"sneakers?|trainers?|runners?|running|(low|mid|high)[- ]tops?|slip[- ]ons?"),
     ],
     "accessories": [
-        ("bags", r"bags?|totes?|backpacks?|pouch(es)?|clutch(es)?|duffe?ls?|bors[ae]"),
-        ("hats", r"hats?|caps?|beanies?|berets?|balaclavas?|headwear|cappell[oi]"),
+        ("bags", r"\w*bags?|totes?|backpacks?|pouch(es)?|clutch(es)?|duffe?ls?|bors[ae]|wristlets?|pochettes?"
+                 r"|hobos?|zain[oi]"),
+        ("hats", r"hats?|caps?|beanies?|berets?|balaclavas?|headwear|cappell[oi]|visors?"),
         ("socks", r"socks?|calz(e|ini)"),
-        ("scarves", r"scar(f|ves)|gloves?|mitt(s|ens)?|bandanas?|sciarp[ae]|guanti"),
+        ("scarves", r"scar(f|ves)|gloves?|mitt(s|ens)?|bandanas?|sciarp[ae]|guanti|stoles?|shawls?|foulards?"),
         ("eyewear", r"sunglasses|eyewear|glasses|occhiali"),
-        ("jewelry", r"jewel(le)?ry|necklaces?|bracelets?|rings?|earrings?|pendants?|collan[ae]|braccial[ei]|anell[oi]"
-                    r"|orecchini|gioielli"),
+        ("jewelry", r"jewel(le)?ry|necklaces?|bracelets?|rings?|earrings?|pendants?|anklets?|brooch(es)?"
+                    r"|cufflinks?|collan[ae]|braccial[ei]|anell[oi]|orecchini|gioielli"),
         ("belts", r"belts?|cintur[ae]"),
         ("wallets", r"wallets?|card ?holders?|portafogli[o]?"),
         ("watches", r"watch(es)?"),
@@ -654,17 +754,23 @@ def size_tokens(kind, live, every):
     return sorted(out, key=lambda t: (LETTERS.index(t) if t in LETTERS else 99, t))
 
 
-def group_kind(store, ptype, title, brand=""):
+def group_kind(store, ptype, title, brand="", tags=()):
     """(group, kind, type) for an item: the store's group by default, sorted per item for clothing and mixed
     stores; clothing also gets its type within the kind where the listing says ("jeans" among bottoms)."""
     group, kind = store.get("group", "other"), None
     # Clothing stores, and others marked "mixed", get sorted per item.
     # Pure kitchen / stationery shops don't: "Pen Cap" is not a hat.
     if group == "clothing" or store.get("mixed"):
-        group, _, kind = (categorize(ptype, title) or group).partition("/")
+        found = categorize(ptype, title)
+        # The second pass only for what would otherwise be "Other clothing": not where the store names a default
+        # kind (Shinola's "Zip Brief" is a briefcase), nor a mixed store whose default is not clothing.
+        if not found and group == "clothing" and not store.get("kind"):
+            found = categorize_more(store, ptype, title, tags)
+        group, _, kind = (found or group).partition("/")
         if group == "clothing":
             kind = kind or store.get("kind", "other")
-            return group, kind, item_type(kind, ptype, title, brand)
+            # "_" read as a space ("knit_sweater"), but run-together words left alone: "TechKnit" is a fabric
+            return group, kind, item_type(kind, ptype.replace("_", " "), title.replace("_", " "), brand)
     return group, kind or None, None
 
 
@@ -915,6 +1021,10 @@ def main():
         # "feed": a shop whose own address is a custom front end still serves its Shopify data from another
         # host (often <name>.myshopify.com). Items keep the shop's address; only the reading goes there.
         feed = store.get("feed", host)
+        # "locale": "/en" -- a store that titles its products in French at its root and in English under a path.
+        # Only for a store whose path keeps the same handles and currency (Isabel Marant): AMI and Rouje switch
+        # to dollars and Julian renames its handles under /en-us, which would start their price history over.
+        locale = store.get("locale", "")
         LANE.delay = store.get("delay_seconds")      # a store whose robots.txt asks for a longer Crawl-delay
         LANE.gzip = store.get("read") == "listing"
         print(f"{host} ...", flush=True)
@@ -922,7 +1032,7 @@ def main():
         def take(it, full, handle=None):
             """One product of the store's catalogue: track it, and list it if it is on sale (or "all")."""
             it["group"], it["kind"], it["type"] = group_kind(
-                store, it["ptype"], it["title"], store.get("brand") or it["brand"])
+                store, it["ptype"], it["title"], store.get("brand") or it["brand"], it.pop("raw_tags", ()))
             readings[it["id"]] = {"price": it["price"], "off": it["off"], "avail": it["avail"],
                                   "brand": store.get("brand") or it["brand"],
                                   "kind": it["kind"] or it["group"], "published": it["published"]}
@@ -943,7 +1053,7 @@ def main():
             if store["platform"] == "shopify":
                 if store.get("browse") or wanted:
                     # if the store won't say this time, assume the currency it used last time
-                    store["currency"] = served_currency(feed) or state.get(host, {}).get("cur") \
+                    store["currency"] = served_currency(feed + locale) or state.get(host, {}).get("cur") \
                         or store.get("currency", "USD")
                     if store["currency"] != state.get(host, {}).get("cur"):
                         known = {}               # prices tracked in another currency can't be compared
@@ -952,7 +1062,7 @@ def main():
                     # retailers that rate-limit a full catalog read but stock a few brands worth tracking.
                     seen, whole = set(), not store.get("collections")
                     for c in store.get("collections") or [None]:
-                        path = f"/collections/{c}" if c else ""
+                        path = locale + (f"/collections/{c}" if c else "")
                         # "all": true lists the store's whole in-stock range, not only its discounts;
                         # "all": ["visvim"] does that for just those collections.
                         full = store.get("all") is True or c in (store.get("all") or [])
@@ -960,7 +1070,7 @@ def main():
                             for n, p in enumerate(shopify_feed(feed, path, max_pages), 1):
                                 if n == max_pages * 250:
                                     whole = False            # the page cap cut the catalogue short
-                                it = shopify_item(host, p)
+                                it = shopify_item(host, p, locale=locale)
                                 if not it or p.get("handle") in seen:
                                     continue
                                 seen.add(p.get("handle"))
@@ -1085,6 +1195,7 @@ def main():
         if s.get("brand"):                       # brand-run stores whose own "vendor" field is not the brand
             it["brand"] = s["brand"]
         ptype = it.pop("ptype", "")
+        it.pop("raw_tags", None)
         old = it.get("stale") or it.pop("carried", False)   # reused from the last run: keep what it had
         it.pop("published", None)
         if not old and "kind" not in it:         # items from a store's feed were sorted as they were read
