@@ -907,9 +907,18 @@ def products(page, base, store):
         # a badge the grid prints inside the name ("New Season Valentino Garavani ...")
         for it in found:
             it["title"] = clean_title(re.sub(store["trim"], "", it["title"], flags=re.I))
+    if store.get("image_fix"):
+        # a placeholder the page's scripts fill in ("__IMAGE_PARAMS__" in SSENSE's JSON-LD, a 404 as it stands)
+        old, new = store["image_fix"]
+        for it in found:
+            it["img"] = (it["img"] or "").replace(old, new)
     if store.get("via", "ld") in ("ld", "json") and any(it["was"] is None or not it["sizes"] for it in found):
-        # what the tiles of the same page show about a product the data left out
+        # what the tiles of the same page show about a product the data left out; where no tile is recognised,
+        # the links to product pages with the prices after them ("link"), which is how SSENSE prints its
+        # struck-through original price beside a JSON-LD offer that has none
         tiles = {canon(t["url"]): t for t in from_tiles(page, base, store)}
+        if not tiles and store.get("link"):
+            tiles = {canon(t["url"]): t for t in from_links(page, base, store)}
         for it in found:
             t = tiles.get(canon(it["url"]))
             if not t or abs(t["price"] - it["price"]) > 0.01:

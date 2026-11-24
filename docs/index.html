@@ -237,7 +237,6 @@
     <button class="pill" id="dir" title="Reverse the order"></button>
     <label><input type="checkbox" id="stock"> In stock</label>
     <label><input type="checkbox" id="mysizes"> My sizes</label>
-    <label title="Also search every in-stock full-price item at the tracked stores (a large download, once per visit)"><input type="checkbox" id="fullswitch"> Search full price</label>
     <button class="pill" id="opensettings">Settings</button>
     <button class="pill" id="openchat">Ask the assistant</button>
   </div>
@@ -303,6 +302,12 @@
   <div class="row"><span>Item categories</span><div class="chips" id="itemcatlist"></div></div>
   <div class="row"><span>Store categories</span><div class="chips" id="storecatlist"></div></div>
 
+  <h2>Search</h2>
+  <label class="check"><input type="checkbox" id="fullswitch"> Search every item the stores have in stock, not only sales</label>
+  <p>On a search, items at full price (or under the minimum discount) are listed below the sale results. The first
+     search of a visit downloads the whole catalogue (about 12 MB) and searches it in the background; switch this
+     off to search only the sale list and the brands a search names.</p>
+
   <h2>High-volume stores</h2>
   <label class="check"><input type="checkbox" id="calm"> Hide stores that list far more items than the rest</label>
   <p id="calminfo"></p>
@@ -355,7 +360,7 @@ let DATA = { items: [], status: [] }, IDS = new Set(), tab = "wish", shown = PAG
 //   brands     brands you looked up on the "From my brands" tab (key -> name), beside those of followed items
 //   notes      preferences the shopping assistant saved (the API key is stored separately, never in here)
 //   calm       true to hide high-volume stores (see crowd() below)
-//   full       true to search every full-price item too ("Search full price", see FULL below)
+//   full       search every in-stock item, not only the sale list (on unless switched off in Settings; see FULL below)
 let prefs;
 const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -364,7 +369,7 @@ function loadPrefs(text) {
   const p = JSON.parse(text);
   prefs = { follows: p.follows || {}, itemCats: p.itemCats || {}, kept: p.kept || {}, storeCats: p.storeCats || {},
             hidden: p.hidden || {}, muted: p.muted || {}, gender: p.gender || "", notes: p.notes || [], calm: !!p.calm,
-            changes: p.changes || [], brands: p.brands || {}, full: !!p.full,
+            changes: p.changes || [], brands: p.brands || {}, full: p.full !== false,
             sizes: { tops: [], bottoms: [], shoes: [], ...(p.sizes || {}) } };
 }
 function savePrefs() { try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch (e) {} }
@@ -1155,7 +1160,8 @@ function searchTyped() { clearTimeout(typing); typing = setTimeout(() => { shown
 
 // ---- full price. The list holds sale items; a search on Everything also looks through what the stores sell at full
 // price, shown below the sale results. A search that names a brand ("jacquemus shirt", "acne jeans") fetches that
-// brand's file (brands/<n>.json, tens of KB). "Search full price" goes further: every in-stock item at every store,
+// brand's file (brands/<n>.json, tens of KB). Searching everything (the default; Settings can switch it off) goes
+// further: every in-stock item at every store,
 // from everything.json (packed by write_everything() in build.py), searched in a background worker that runs the
 // page's own search code, so typos, "jeans" and "womens" read the same as above. A tile the sale results already show
 // is left out (its panel lists the full-price stores), and the section counts tiles like the grid.
@@ -1278,7 +1284,7 @@ function drawFull() {
     items = named.flatMap(b => (LOADED.get(bucket(b.key)) || []).filter(i => keys.has(brandOf(i))));
     head = "Full price from " + named.map(b => b.name).join(", ");
     if (!named.every(b => ARRIVED.has(bucket(b.key)))) extra = "Loading… ";
-    extra += prefs.full ? "" : "Tick “Search full price” to search every brand. ";
+    extra += prefs.full ? "" : "Searching every brand is switched off in Settings. ";
   }
   const list = filtered(items, LAST.brands, { skip: new Set(LAST.list.map(i => tileKey(i)).filter(Boolean)), searched, gender: searched ? FULL.gender : "" });
   sec.hidden = !list.length && !extra;
