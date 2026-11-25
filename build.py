@@ -921,6 +921,13 @@ ELSEWHERE_CURRENCY = 10    # extra points when the other stores quote another cu
 ELSEWHERE_MAX = 75
 
 
+def carried_deal(it):
+    """A deal at other stores' prices from the last run. These are never carried into a run: they are worked out
+    again from this run's prices once every store is in, and as copies of catalogue items (which can lack fields
+    a list item has, such as sizes) they would not survive decorating."""
+    return it.get("tags") == ["elsewhere"]
+
+
 def cheaper_elsewhere(every, marks, listed, min_off):
     """Listings not on the list that are at least min_off under the same item at the other stores that stock it.
     every: id -> listing (the list and every catalogue); marks: matching's `m` per listing; listed: ids on the
@@ -966,7 +973,7 @@ def regroup():
     data = load_json(path, {"items": []})
     cfg = load_json(os.path.join(ROOT, "stores.json"), {"stores": []})
     rates = {**FALLBACK_RATES, **(data.get("rates") or {})}
-    data["items"] = [it for it in data["items"] if it.get("tags") != ["elsewhere"]]   # worked out again below
+    data["items"] = [it for it in data["items"] if not carried_deal(it)]   # worked out again below
     marks, deals = match_products(data["items"], history.load_state(), rates, {s["host"]: s for s in cfg["stores"]},
                                   data.get("min_discount", 20))
     write_brand_files(marks, {it["id"] for it in deals})
@@ -1208,7 +1215,7 @@ def main():
     for host, store in stores.items():
         if host not in done:                   # not refreshed this run: keep last run's items and status as they were
             for old in previous.get("items", []):
-                if old.get("store") == host and old["id"] not in items:
+                if old.get("store") == host and old["id"] not in items and not carried_deal(old):
                     old["carried"] = True
                     items[old["id"]] = old
             if host in old_status:
@@ -1229,7 +1236,7 @@ def main():
         got = len(items) - before
         if errors and got == 0:
             for old in previous.get("items", []):
-                if old.get("store") == host and old["id"] not in items:
+                if old.get("store") == host and old["id"] not in items and not carried_deal(old):
                     old["stale"] = True
                     items[old["id"]] = old
         if store["platform"] != "link" or errors:
@@ -1317,9 +1324,6 @@ def main():
         del state[host]
     history.save_state(state)
     write_catalog(catalog, stores)
-    # last run's deals at other stores' prices, carried with a store not read this run, are worked out again
-    for lid in [lid for lid, it in items.items() if it.get("tags") == ["elsewhere"]]:
-        del items[lid]
     marks, deals = match_products(list(items.values()), state, rates, stores, min_off)
     write_brand_files(marks, {it["id"] for it in deals})
     items.update((it["id"], it) for it in deals)
