@@ -1,0 +1,7 @@
+{"host":"www.nearearth.run","fetched":"2026-11-27T20:09","since":"2026-11-19T09:28","cur":"USD","reads":157,"partial":false,"log":[["2026-11-19",4,4,0,0],["2026-11-20",4,4,0,0],["2026-11-21",4,4,0,0],["2026-11-22",4,4,0,0],["2026-11-23",4,4,0,0],["2026-11-24",4,4,0,0],["2026-11-25",4,4,0,0],["2026-11-26",3,3,0,0],["2026-11-27",3,3,0,0]],"fails":21,"error":"catalog: feed returned HTTP 429",
+"products":{
+"www.nearearth.run/the-distance-running-socks":{"f":"2026-11-19T17:57","h":[["2026-11-19T17:57",24.0,0,1]],"b":"Near Earth","k":"accessories","p":"2024-02-23"},
+"www.nearearth.run/the-distance-running-socks-2x-set":{"f":"2026-11-19T17:57","h":[["2026-11-19T17:57",45.0,0,1]],"b":"Near Earth","k":"accessories","p":"2024-02-23","x":"2026-11-26T09:32"},
+"www.nearearth.run/the-race-day-sock":{"f":"2026-11-19T17:57","h":[["2026-11-19T17:57",28.0,0,1]],"b":"Near Earth","k":"accessories","p":"2024-06-07"},
+"www.nearearth.run/the-race-day-sock-quarter":{"f":"2026-11-19T17:57","h":[["2026-11-19T17:57",26.0,0,1]],"b":"Near Earth","k":"accessories","p":"2024-06-07"}
+}}
